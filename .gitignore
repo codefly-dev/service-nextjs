@@ -1,0 +1,42 @@
+*.so
+.idea
+go.work*
+dist
+*lock
+
+dist/
+.DS_Store
+
+### Factory ###
+# dependencies
+/templates/factory/node_modules
+
+# testing
+/templates/factory/coverage
+
+# next.js
+/templates/factory/.next/
+/templates/factory/out/
+
+# production
+/templates/factory/build
+
+# misc
+/templates/factory/.DS_Store
+/templates/factory/*.pem
+
+# debug
+/templates/factory/npm-debug.log*
+/templates/factory/yarn-debug.log*
+/templates/factory/yarn-error.log*
+/templates/factory/.pnpm-debug.log*
+
+# local env files
+/templates/factory/.env*.local
+
+# vercel
+/templates/factory/.vercel
+
+# typescript
+/templates/factory/*.tsbuildinfo
+/templates/factory/next-env.d.ts
