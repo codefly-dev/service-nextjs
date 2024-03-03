@@ -1,15 +1,25 @@
-import { UserProvider } from "@auth0/nextjs-auth0/client";
 import "../styles/globals.css";
+import { CodeflyContextProvider } from "./providers/codefly.provider";
 
-export default function App({ Component, pageProps }) {
-  // optionally pass the 'user' prop from pages that require server-side
-  // rendering to prepopulate the 'useUser' hook.
+import { routing, getEndpoints } from "codefly"
+import  { AppContext } from 'next/app'
 
-  const { user } = pageProps;
+type AppOwnProps = { Component?: any; pageProps?: any; endpoints: any; }
 
+export default function App({ Component, pageProps, endpoints }) {  
   return (
-    <UserProvider user={user}>
+    // This provides codefly info to the app to use in the client side rendering
+    <CodeflyContextProvider endpoints={endpoints}>
       <Component {...pageProps} />
-    </UserProvider>
+    </CodeflyContextProvider>
   );
+}
+
+App.getInitialProps = async (
+  context: AppContext
+): Promise<AppOwnProps> => {
+ 
+  const endpoints = getEndpoints();
+
+  return { endpoints }
 }

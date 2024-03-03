@@ -1,4 +1,3 @@
-import useSWR from "swr";
 import { JSONView } from "./json-view";
 
 export function Endpoints({
