@@ -32,8 +32,6 @@ const useCodeflyContext = () => {
     }
 
     const routing = (method, endpoint, path) => {
-        console.log("method, endpoint, path", method, endpoint, path);
-        console.log("context.data.endpoints", context.data.endpoints);
         return _routing[method](endpoint, path, [...context.data.endpoints])
     }
     
