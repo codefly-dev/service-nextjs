@@ -14,7 +14,8 @@ const getColorForMethod = (method) => {
         'DELETE' : 'red'
     };
     
-    return colors[method] || 'green';
+    // TODO : do this later
+    return `bg-green-500`;
 }
 
 const Endpoint = ({ endpoint }) => {
@@ -73,7 +74,7 @@ const Endpoint = ({ endpoint }) => {
                     {
                         endpoint.routes.map(r => (
                             <li onClick={() => handleRouteClick(r)} key={r.path} className="bg-gray-100 dark:bg-gray-700 cursor-pointer hover:bg-gray-200 dark:hover:bg-gray-600 p-2 pl-10 border-b border-gray-400">
-                                <span className={`bg-${getColorForMethod(r.method)}-500 p-1 pl-2 pr-2 rounded-md mr-1`}>{r.method}</span>
+                                <span className={` ${getColorForMethod(r.method)} p-1 pl-2 pr-2 rounded-md mr-1`}>{r.method}</span>
                                 <span className="bg-gray-500 p-1 pl-2 pr-2 rounded-md mr-1 italic text-white">{r.path}</span></li>
                         ))
                     }
