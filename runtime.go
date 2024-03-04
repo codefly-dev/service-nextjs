@@ -18,6 +18,8 @@ import (
 
 type Runtime struct {
 	*Service
+	SourceLocation string
+
 	Runner *runners.Runner
 
 	NetworkMappings []*basev0.NetworkMapping
@@ -38,6 +40,8 @@ func (s *Runtime) Load(ctx context.Context, req *runtimev0.LoadRequest) (*runtim
 	if err != nil {
 		return s.Base.Runtime.LoadError(err)
 	}
+
+	s.SourceLocation = s.Local("src")
 
 	s.EnvironmentVariables = s.LoadEnvironmentVariables(req.Environment)
 
@@ -99,9 +103,8 @@ func (s *Runtime) Start(ctx context.Context, req *runtimev0.StartRequest) (*runt
 	// Generate the .env.local
 	s.Wool.Debug("copying special files")
 	err = templates.CopyAndApplyTemplate(ctx, shared.Embed(specialFS),
-		"templates/special/env.local.tmpl",
-		s.Local(".env.local"),
-		envs)
+		"templates/factory/special/env.local.tmpl",
+		s.Local("src/.env.local"), envs)
 	if err != nil {
 		return s.Base.Runtime.StartError(err, wool.InField("copying special files"))
 	}
@@ -118,7 +121,7 @@ func (s *Runtime) Start(ctx context.Context, req *runtimev0.StartRequest) (*runt
 		return s.Base.Runtime.StartError(err, wool.InField("runner"))
 	}
 	s.Runner = runner
-	s.Runner.WithDir(s.Location)
+	s.Runner.WithDir(s.SourceLocation)
 
 	err = s.Runner.Start()
 	if err != nil {

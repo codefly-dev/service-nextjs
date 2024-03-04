@@ -26,8 +26,7 @@ var agent = shared.Must(configurations.LoadFromFs[configurations.Agent](shared.E
 
 var requirements = builders.NewDependencies(agent.Name,
 	builders.NewDependency("service.codefly.yaml"),
-	builders.NewDependency("components", "interfaces", "pages", "styles", "additional.d.ts",
-		"next-env.d.ts", "tsconfig.json", "postcss.config.js", "tailwind.config.js", "package.json").WithPathSelect(shared.NewIgnore("node_modules/*")),
+	builders.NewDependency("src").WithPathSelect(shared.NewIgnore("src/node_modules/*")),
 )
 
 type Settings struct {

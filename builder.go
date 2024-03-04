@@ -19,6 +19,8 @@ import (
 type Builder struct {
 	*Service
 
+	SourceLocation string
+
 	EnvironmentVariables *configurations.EnvironmentVariableManager
 	NetworkMappings      []*basev0.NetworkMapping
 }
@@ -36,6 +38,8 @@ func (s *Builder) Load(ctx context.Context, req *builderv0.LoadRequest) (*builde
 	if err != nil {
 		return nil, err
 	}
+
+	s.SourceLocation, err = s.LocalDirCreate(ctx, "src")
 
 	gettingStarted, err := templates.ApplyTemplateFrom(ctx, shared.Embed(factoryFS), "templates/factory/GETTING_STARTED.md", s.Information)
 	if err != nil {
@@ -90,13 +94,14 @@ func (s *Builder) Build(ctx context.Context, req *builderv0.BuildRequest) (*buil
 	s.Wool.Debug("building docker image")
 	ctx = s.Wool.Inject(ctx)
 
+	image := s.DockerImage(req.BuildContext)
 	s.Wool.In("Build").Debug("dependencies", wool.SliceCountField(s.DependencyEndpoints))
 
 	docker := DockerTemplating{
 		Components: requirements.All(),
 	}
 
-	err := shared.DeleteFile(ctx, s.Local("codefly/builder/Dockerfile"))
+	err := shared.DeleteFile(ctx, s.Local("builder/Dockerfile"))
 	if err != nil {
 		return nil, s.Wool.Wrapf(err, "cannot remove dockerfile")
 	}
@@ -108,8 +113,8 @@ func (s *Builder) Build(ctx context.Context, req *builderv0.BuildRequest) (*buil
 
 	builder, err := dockerhelpers.NewBuilder(dockerhelpers.BuilderConfiguration{
 		Root:        s.Location,
-		Dockerfile:  "codefly/builder/Dockerfile",
-		Destination: s.DockerImage(),
+		Dockerfile:  "builder/Dockerfile",
+		Destination: image,
 		Output:      s.Wool,
 	})
 	if err != nil {
@@ -141,8 +146,7 @@ func (s *Builder) Deploy(ctx context.Context, req *builderv0.DeploymentRequest) 
 
 	endpoints := services.EnvsAsConfigMapData(envs)
 
-	auth0 := services.EnvsAsSecretData(s.EnvironmentVariables.GetBase())
-	params := services.DeploymentParameter{SecretMap: auth0, ConfigMap: endpoints}
+	params := services.DeploymentParameter{ConfigMap: endpoints}
 
 	err = s.Builder.Deploy(ctx, req, deploymentFS, params)
 	if err != nil {
@@ -165,7 +169,7 @@ func (s *Builder) Create(ctx context.Context, req *builderv0.CreateRequest) (*bu
 		return s.Builder.CreateError(err)
 	}
 
-	ignore := shared.NewIgnore("node_modules", ".next", ".idea")
+	ignore := shared.NewIgnore("node_modules", ".next", ".idea", "env.local")
 	err = s.Templates(ctx, s.Information, services.WithFactory(factoryFS).WithPathSelect(ignore))
 
 	if err != nil {
@@ -174,8 +178,8 @@ func (s *Builder) Create(ctx context.Context, req *builderv0.CreateRequest) (*bu
 
 	// Need to handle the case of pages/_aps.tsx
 	err = templates.Copy(ctx, shared.Embed(specialFS),
-		"templates/special/pages/app.tsx",
-		s.Local("pages/_app.tsx"))
+		"templates/factory/special/pages/app.tsx",
+		s.Local("src/pages/_app.tsx"))
 	if err != nil {
 		return s.Builder.CreateError(err)
 	}
@@ -193,7 +197,7 @@ func (s *Builder) Create(ctx context.Context, req *builderv0.CreateRequest) (*bu
 	if err != nil {
 		return s.Builder.CreateError(err)
 	}
-	runner.WithDir(s.Location)
+	runner.WithDir(s.SourceLocation)
 
 	err = runner.Run()
 	if err != nil {
@@ -223,5 +227,5 @@ var builderFS embed.FS
 //go:embed templates/deployment
 var deploymentFS embed.FS
 
-//go:embed templates/special
+//go:embed templates/factory/special
 var specialFS embed.FS
