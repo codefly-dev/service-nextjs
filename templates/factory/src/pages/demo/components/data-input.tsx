@@ -1,6 +1,4 @@
 import { useState } from 'react';
-import JSONInput from 'react-json-editor-ajrm';
-import locale from 'react-json-editor-ajrm/locale/en';
 import { useResponseData } from '../response.provider';
 import { useCodeflyContext } from '../../providers/codefly.provider';
 
