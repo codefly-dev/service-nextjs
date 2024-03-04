@@ -45,7 +45,8 @@ const DataInput = () => {
         setJsonInput(event.target.value);
     };
 
-    const handleParseJson = () => {
+    const handleSubmit = () => {
+        setResponse(null);
         try {
             const parsedData = JSON.parse(jsonInput);
             setJsonData(parsedData);
@@ -70,10 +71,12 @@ const DataInput = () => {
                 />
             </div>
 
+            {error && <div className="text-red-500">{error}</div>}
+
             <button
                 className="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 mt-6 mb-6 rounded"
                 type="button"
-                onClick={handleParseJson}
+                onClick={handleSubmit}
             >
                 Send
             </button>
