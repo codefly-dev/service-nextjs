@@ -4,17 +4,25 @@ import { JSONView } from "../../components/json-view";
 
 import { useResponseData } from "./response.provider";
 import DataViewInitital from "./components/data-view-initial";
+import DataInput from './components/data-input';
 
 
 const DataView = () => {
     const { response, endpoint, loading, route } = useResponseData();
 
-    if (!response && !loading) {
+    const method = route?.method;
+
+
+    if (!response && !loading && !route) {
         return <DataViewInitital />
     }
 
+   
+
     return (
         <div className="w-3/4 pl-8 pt-0">
+
+            { method !== "GET" && <DataInput />}
             <h2 className="pb-4">Response</h2>
 
 
@@ -32,13 +40,15 @@ const DataView = () => {
 
             </div>
 
-            <div className='max-w-[600px] mb-10 mr-6'>
-                <h5 className="mb-1 ">Data loaded</h5>
+            <div className='max-w-[600px] mb-10 mr-6 '>
+                {response && <h2 className="mb-1">Data</h2> }
+                <div className='max-h-[250px] overflow-y-auto border rounded-md'>
                 <JSONView>
                     {loading ? "Loading..." : response
                         ? JSON.stringify(response, null, 2)
-                        : "Select an endpoint to test the response"}
+                        : ""}
                 </JSONView>
+                </div>
             </div>
 
         </div>
