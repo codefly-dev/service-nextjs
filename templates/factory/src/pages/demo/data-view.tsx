@@ -31,9 +31,9 @@ const DataView = () => {
                     In the code, we fetch the data with the SDK
                 </p>
 
-                <div className='max-w-[600px] mb-10 mr-6 border p-1 rounded-md'>
+                <div className='max-w-[900px] mb-10 mr-6 border p-1 rounded-md'>
                     <CopyBlock
-                        text={`\nconst { routing } = useCodeflyContext();\nconst url = routing("${route.method}", "${endpoint.serviceName}", "${route.path}")\n\n`}
+                        text={`\nconst { routing } = useCodeflyContext();\nconst url = routing("${route.method}", "${endpoint.service}", "${route.path}")\n\n`}
                         language={"javascript"}
                         showLineNumbers={false}
                         theme={dracula}
