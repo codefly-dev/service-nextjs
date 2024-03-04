@@ -6,7 +6,7 @@ import { useCodeflyContext } from "../providers/codefly.provider";
 import { useResponseData } from "./response.provider";
 
 const getColorForMethod = (method) => {
-    let colors = {
+    const colors = {
         'GET': 'green',
         'POST': 'yellow',
         'PATCH': 'emerald',
@@ -15,7 +15,7 @@ const getColorForMethod = (method) => {
     };
     
     // TODO : do this later
-    return `bg-green-500`;
+    return colors[method] ? `bg-${colors[method]}-500` : 'bg-green-500';
 }
 
 const Endpoint = ({ endpoint }) => {
