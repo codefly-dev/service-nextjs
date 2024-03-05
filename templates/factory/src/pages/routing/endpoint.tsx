@@ -33,7 +33,7 @@ const Endpoint = ({ endpoint }) => {
             }
 
             setLoading(true);
-            const response = await fetch("http://" + url, {
+            const response = await fetch(url, {
                 method: method,
                 headers: {
                     'Content-Type': 'application/json',

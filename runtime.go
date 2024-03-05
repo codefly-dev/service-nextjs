@@ -67,19 +67,6 @@ func (s *Runtime) Init(ctx context.Context, req *runtimev0.InitRequest) (*runtim
 
 	s.Port = net.Port
 
-	runningContext := s.Wool.Inject(context.Background())
-	runner, err := runners.NewRunner(runningContext, "npm", "install")
-	if err != nil {
-		return s.Base.Runtime.InitError(err)
-	}
-	s.Runner = runner
-	s.Runner.WithDir(s.SourceLocation)
-
-	err = s.Runner.Run()
-	if err != nil {
-		return s.Base.Runtime.InitError(err, wool.InField("runner"))
-	}
-
 	return s.Base.Runtime.InitResponse(s.NetworkMappings)
 }
 
@@ -154,14 +141,15 @@ func (s *Runtime) Stop(ctx context.Context, req *runtimev0.StopRequest) (*runtim
 	s.Wool.Debug("stopping service")
 	err := s.Runner.Stop()
 	if err != nil {
-		return nil, s.Wool.Wrapf(err, "cannot kill go")
+		return nil, s.Wool.Wrapf(err, "cannot kill runner")
 	}
 
+	s.Wool.Debug("runner stopped")
 	err = s.Base.Stop()
 	if err != nil {
-		return nil, err
+		return nil, s.Wool.Wrapf(err, "cannot stop base")
 	}
-	return &runtimev0.StopResponse{}, nil
+	return s.Runtime.StopResponse()
 }
 
 func (s *Runtime) Communicate(ctx context.Context, req *agentv0.Engage) (*agentv0.InformationRequest, error) {
