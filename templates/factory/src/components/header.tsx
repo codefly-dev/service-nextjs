@@ -13,8 +13,8 @@ const Header = ({  }: HeaderProps) => {
         <h1>Codefly</h1>
       </Link>
 
-      <Link href="/demo" style={{ marginLeft: '20px'}}>
-        <h1>Demo</h1>
+      <Link href="/routing" style={{ marginLeft: '20px'}}>
+        <h1>Routing</h1>
       </Link>
       </div>
 

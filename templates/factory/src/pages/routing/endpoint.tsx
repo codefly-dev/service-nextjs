@@ -5,6 +5,18 @@ import { DoubleArrowRightIcon } from "@radix-ui/react-icons";
 import { useCodeflyContext } from "../providers/codefly.provider";
 import { useResponseData } from "./response.provider";
 
+const getColorForMethod = (method) => {
+    const colors = {
+        'GET': 'green',
+        'POST': 'yellow',
+        'PATCH': 'emerald',
+        'PUT' : 'emerald',
+        'DELETE' : 'red'
+    };
+    
+    // TODO : do this later
+    return colors[method] ? `bg-${colors[method]}-500` : 'bg-green-500';
+}
 
 const Endpoint = ({ endpoint }) => {
     const { routing } = useCodeflyContext();
@@ -40,11 +52,13 @@ const Endpoint = ({ endpoint }) => {
     const [isContentVisible, setIsContentVisible] = useState<boolean>(false);
 
     const handleRouteClick = (route) => {
+        setResponse(null)
         if (route.method === 'GET') {
 
             hanldeFetch(route, null)
-            setRoute(route);
         }
+        setRoute(route);
+
     }
 
     const handleEndpointClick = () => {
@@ -60,7 +74,7 @@ const Endpoint = ({ endpoint }) => {
                     {
                         endpoint.routes.map(r => (
                             <li onClick={() => handleRouteClick(r)} key={r.path} className="bg-gray-100 dark:bg-gray-700 cursor-pointer hover:bg-gray-200 dark:hover:bg-gray-600 p-2 pl-10 border-b border-gray-400">
-                                <span className="bg-green-500 p-1 pl-2 pr-2 rounded-md mr-1">{r.method}</span>
+                                <span className={` ${getColorForMethod(r.method)} p-1 pl-2 pr-2 rounded-md mr-1`}>{r.method}</span>
                                 <span className="bg-gray-500 p-1 pl-2 pr-2 rounded-md mr-1 italic text-white">{r.path}</span></li>
                         ))
                     }
