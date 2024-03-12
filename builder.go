@@ -198,8 +198,10 @@ func (s *Builder) Create(ctx context.Context, req *builderv0.CreateRequest) (*bu
 		return s.Builder.CreateError(err)
 	}
 	runner.WithDir(s.SourceLocation)
+	runner.WithOut(s.Wool)
 
 	err = runner.Run()
+
 	if err != nil {
 		return s.Builder.CreateError(err)
 	}
