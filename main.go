@@ -22,7 +22,7 @@ import (
 )
 
 // Agent version
-var agent = shared.Must(configurations.LoadFromFs[configurations.Agent](shared.Embed(info)))
+var agent = shared.Must(configurations.LoadFromFs[configurations.Agent](shared.Embed(infoFS)))
 
 var requirements = builders.NewDependencies(agent.Name,
 	builders.NewDependency("service.codefly.yaml"),
@@ -36,17 +36,17 @@ type Settings struct {
 type Service struct {
 	*services.Base
 
-	EnvironmentVariables *configurations.EnvironmentVariableManager
-
 	// Settings
 	*Settings
-	Endpoint *basev0.Endpoint
+
+	httpEndpoint   *basev0.Endpoint
+	sourceLocation string
 }
 
 func (s *Service) GetAgentInformation(ctx context.Context, _ *agentv0.AgentInformationRequest) (*agentv0.AgentInformation, error) {
 	defer s.Wool.Catch()
 
-	readme, err := templates.ApplyTemplateFrom(ctx, shared.Embed(readme), "templates/agent/README.md", s.Information)
+	readme, err := templates.ApplyTemplateFrom(ctx, shared.Embed(readmeFS), "templates/agent/README.md", s.Information)
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
@@ -84,16 +84,17 @@ func main() {
 
 func (s *Service) LoadEndpoints(ctx context.Context) error {
 	defer s.Wool.Catch()
+	var err error
 	for _, endpoint := range s.Configuration.Endpoints {
 		endpoint.Application = s.Configuration.Application
 		endpoint.Service = s.Configuration.Name
 		switch endpoint.API {
 		case standards.HTTP:
-			http, err := configurations.NewHTTPApi(ctx, endpoint)
+			s.httpEndpoint, err = configurations.NewHTTPApi(ctx, endpoint)
 			if err != nil {
 				return s.Wool.Wrapf(err, "cannot create openapi api")
 			}
-			s.Endpoints = []*basev0.Endpoint{http}
+			s.Endpoints = []*basev0.Endpoint{s.httpEndpoint}
 			continue
 		}
 	}
@@ -101,7 +102,7 @@ func (s *Service) LoadEndpoints(ctx context.Context) error {
 }
 
 //go:embed agent.codefly.yaml
-var info embed.FS
+var infoFS embed.FS
 
 //go:embed templates/agent
-var readme embed.FS
+var readmeFS embed.FS

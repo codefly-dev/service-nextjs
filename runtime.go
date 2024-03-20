@@ -3,11 +3,8 @@ package main
 import (
 	"context"
 	"fmt"
-	"github.com/codefly-dev/core/configurations"
-	"github.com/codefly-dev/core/configurations/standards"
-	basev0 "github.com/codefly-dev/core/generated/go/base/v0"
-
 	"github.com/codefly-dev/core/agents/helpers/code"
+	"github.com/codefly-dev/core/configurations"
 	agentv0 "github.com/codefly-dev/core/generated/go/services/agent/v0"
 	runtimev0 "github.com/codefly-dev/core/generated/go/services/runtime/v0"
 	"github.com/codefly-dev/core/runners"
@@ -18,13 +15,10 @@ import (
 
 type Runtime struct {
 	*Service
-	SourceLocation string
 
-	Runner *runners.Runner
-
-	NetworkMappings []*basev0.NetworkMapping
-
-	Port int
+	// Internal
+	runner *runners.Runner
+	port   int32
 }
 
 func NewRuntime() *Runtime {
@@ -41,7 +35,7 @@ func (s *Runtime) Load(ctx context.Context, req *runtimev0.LoadRequest) (*runtim
 		return s.Base.Runtime.LoadError(err)
 	}
 
-	s.SourceLocation = s.Local("src")
+	s.sourceLocation = s.Local("src")
 
 	s.EnvironmentVariables = s.LoadEnvironmentVariables(req.Environment)
 
@@ -60,14 +54,14 @@ func (s *Runtime) Init(ctx context.Context, req *runtimev0.InitRequest) (*runtim
 
 	s.NetworkMappings = req.ProposedNetworkMappings
 
-	net, err := configurations.GetMappingInstanceFor(s.NetworkMappings, standards.HTTP)
+	net, err := configurations.FindNetworkMapping(s.httpEndpoint, s.NetworkMappings)
 	if err != nil {
 		return s.Runtime.InitError(err)
 	}
 
-	s.Port = net.Port
+	s.port = net.Port
 
-	return s.Base.Runtime.InitResponse(s.NetworkMappings)
+	return s.Base.Runtime.InitResponse()
 }
 
 func (s *Runtime) Start(ctx context.Context, req *runtimev0.StartRequest) (*runtimev0.StartResponse, error) {
@@ -110,20 +104,20 @@ func (s *Runtime) Start(ctx context.Context, req *runtimev0.StartRequest) (*runt
 	}
 
 	// We have hot-reloading built-in
-	if s.Runner != nil {
+	if s.runner != nil {
 		s.Wool.Debug("using built-in hot reloading")
 		return s.Runtime.StartResponse()
 	}
 
 	runningContext := s.Wool.Inject(context.Background())
-	runner, err := runners.NewRunner(runningContext, "npm", "run", "dev", "--", "-p", fmt.Sprintf("%d", s.Port))
+	runner, err := runners.NewRunner(runningContext, "npm", "run", "dev", "--", "-p", fmt.Sprintf("%d", s.port))
 	if err != nil {
 		return s.Base.Runtime.StartError(err, wool.InField("runner"))
 	}
-	s.Runner = runner
-	s.Runner.WithDir(s.SourceLocation)
+	s.runner = runner
+	s.runner.WithDir(s.sourceLocation)
 
-	err = s.Runner.Start()
+	err = s.runner.Start()
 	if err != nil {
 		return s.Base.Runtime.StartError(err, wool.InField("runner"))
 	}
@@ -139,7 +133,7 @@ func (s *Runtime) Stop(ctx context.Context, req *runtimev0.StopRequest) (*runtim
 	defer s.Wool.Catch()
 
 	s.Wool.Debug("stopping service")
-	err := s.Runner.Stop()
+	err := s.runner.Stop()
 	if err != nil {
 		return nil, s.Wool.Wrapf(err, "cannot kill runner")
 	}

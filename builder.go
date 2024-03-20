@@ -6,6 +6,7 @@ import (
 	dockerhelpers "github.com/codefly-dev/core/agents/helpers/docker"
 	"github.com/codefly-dev/core/agents/services"
 	"github.com/codefly-dev/core/configurations"
+	"github.com/codefly-dev/core/configurations/standards"
 	basev0 "github.com/codefly-dev/core/generated/go/base/v0"
 	builderv0 "github.com/codefly-dev/core/generated/go/services/builder/v0"
 	"github.com/codefly-dev/core/wool"
@@ -18,11 +19,6 @@ import (
 
 type Builder struct {
 	*Service
-
-	SourceLocation string
-
-	EnvironmentVariables *configurations.EnvironmentVariableManager
-	NetworkMappings      []*basev0.NetworkMapping
 }
 
 func NewBuilder() *Builder {
@@ -39,7 +35,7 @@ func (s *Builder) Load(ctx context.Context, req *builderv0.LoadRequest) (*builde
 		return nil, err
 	}
 
-	s.SourceLocation, err = s.LocalDirCreate(ctx, "src")
+	s.sourceLocation, err = s.LocalDirCreate(ctx, "src")
 
 	gettingStarted, err := templates.ApplyTemplateFrom(ctx, shared.Embed(factoryFS), "templates/factory/GETTING_STARTED.md", s.Information)
 	if err != nil {
@@ -60,12 +56,12 @@ func (s *Builder) Init(ctx context.Context, req *builderv0.InitRequest) (*builde
 	s.Wool.In("Init").Debug("dependencies", wool.SliceCountField(req.DependenciesEndpoints))
 
 	s.DependencyEndpoints = req.DependenciesEndpoints
-	hash, err := requirements.Hash(ctx)
-	if err != nil {
-		return s.Builder.InitError(err)
-	}
+	//hash, err := requirements.Hash(ctx)
+	//if err != nil {
+	//	return s.Builder.InitError(err)
+	//}
 
-	return s.Builder.InitResponse(s.NetworkMappings, hash)
+	return s.Builder.InitResponse()
 }
 
 func (s *Builder) Update(ctx context.Context, req *builderv0.UpdateRequest) (*builderv0.UpdateResponse, error) {
@@ -144,9 +140,12 @@ func (s *Builder) Deploy(ctx context.Context, req *builderv0.DeploymentRequest) 
 
 	envs = append(envs, restEnvs...)
 
-	endpoints := services.EnvsAsConfigMapData(envs)
+	cfMap, err := services.EnvsAsConfigMapData(envs)
+	if err != nil {
+		return s.Builder.DeployError(err)
+	}
 
-	params := services.DeploymentParameter{ConfigMap: endpoints}
+	params := services.DeploymentTemplateInput{ConfigMap: cfMap}
 
 	err = s.Builder.Deploy(ctx, req, deploymentFS, params)
 	if err != nil {
@@ -197,7 +196,7 @@ func (s *Builder) Create(ctx context.Context, req *builderv0.CreateRequest) (*bu
 	if err != nil {
 		return s.Builder.CreateError(err)
 	}
-	runner.WithDir(s.SourceLocation)
+	runner.WithDir(s.sourceLocation)
 	runner.WithOut(s.Wool)
 
 	err = runner.Run()
@@ -212,11 +211,14 @@ func (s *Builder) Create(ctx context.Context, req *builderv0.CreateRequest) (*bu
 }
 
 func (s *Builder) CreateEndpoint(ctx context.Context) error {
-	http, err := configurations.NewHTTPApi(ctx, &configurations.Endpoint{Name: "web", Visibility: configurations.VisibilityPublic})
+	endpoint := s.Configuration.BaseEndpoint(standards.HTTP)
+	endpoint.Visibility = configurations.VisibilityPublic
+	var err error
+	s.httpEndpoint, err = configurations.NewHTTPApi(ctx, endpoint)
 	if err != nil {
 		return s.Wool.Wrapf(err, "cannot create HTTP api")
 	}
-	s.Endpoints = append(s.Endpoints, http)
+	s.Endpoints = []*basev0.Endpoint{s.httpEndpoint}
 	return nil
 }
 
