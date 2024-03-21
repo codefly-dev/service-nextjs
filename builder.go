@@ -145,19 +145,13 @@ func (s *Builder) Deploy(ctx context.Context, req *builderv0.DeploymentRequest) 
 		return s.Builder.DeployError(err)
 	}
 
-	params := services.DeploymentTemplateInput{ConfigMap: cfMap}
+	params := services.DeploymentParameters{ConfigMap: cfMap}
 
-	err = s.Builder.Deploy(ctx, req, deploymentFS, params)
+	err = s.Builder.GenericServiceDeploy(ctx, req, deploymentFS, params)
 	if err != nil {
 		return s.Builder.DeployError(err)
 	}
 	return s.Builder.DeployResponse()
-}
-
-type CreateConfiguration struct {
-	Image  *configurations.DockerImage
-	Domain string
-	Envs   []string
 }
 
 func (s *Builder) Create(ctx context.Context, req *builderv0.CreateRequest) (*builderv0.CreateResponse, error) {
