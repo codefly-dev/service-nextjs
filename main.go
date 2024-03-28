@@ -8,8 +8,6 @@ import (
 
 	basev0 "github.com/codefly-dev/core/generated/go/base/v0"
 
-	"github.com/codefly-dev/core/configurations/standards"
-
 	"github.com/codefly-dev/core/templates"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -42,6 +40,8 @@ type Service struct {
 	httpEndpoint   *basev0.Endpoint
 	sourceLocation string
 }
+
+var runtimeImage = &configurations.DockerImage{Name: "node", Tag: "21-alpine"}
 
 func (s *Service) GetAgentInformation(ctx context.Context, _ *agentv0.AgentInformationRequest) (*agentv0.AgentInformation, error) {
 	defer s.Wool.Catch()
@@ -80,25 +80,6 @@ func NewService() *Service {
 
 func main() {
 	agents.Register(services.NewServiceAgent(agent.Of(configurations.ServiceAgent), NewService()), services.NewBuilderAgent(agent.Of(configurations.RuntimeServiceAgent), NewBuilder()), services.NewRuntimeAgent(agent.Of(configurations.BuilderServiceAgent), NewRuntime()))
-}
-
-func (s *Service) LoadEndpoints(ctx context.Context) error {
-	defer s.Wool.Catch()
-	var err error
-	for _, endpoint := range s.Configuration.Endpoints {
-		endpoint.Application = s.Configuration.Application
-		endpoint.Service = s.Configuration.Name
-		switch endpoint.API {
-		case standards.HTTP:
-			s.httpEndpoint, err = configurations.NewHTTPApi(ctx, endpoint)
-			if err != nil {
-				return s.Wool.Wrapf(err, "cannot create openapi api")
-			}
-			s.Endpoints = []*basev0.Endpoint{s.httpEndpoint}
-			continue
-		}
-	}
-	return nil
 }
 
 //go:embed agent.codefly.yaml

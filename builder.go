@@ -9,12 +9,9 @@ import (
 	"github.com/codefly-dev/core/configurations/standards"
 	basev0 "github.com/codefly-dev/core/generated/go/base/v0"
 	builderv0 "github.com/codefly-dev/core/generated/go/services/builder/v0"
-	"github.com/codefly-dev/core/wool"
-	"os"
-
-	"github.com/codefly-dev/core/runners"
 	"github.com/codefly-dev/core/shared"
 	"github.com/codefly-dev/core/templates"
+	"github.com/codefly-dev/core/wool"
 )
 
 type Builder struct {
@@ -125,32 +122,32 @@ func (s *Builder) Build(ctx context.Context, req *builderv0.BuildRequest) (*buil
 
 func (s *Builder) Deploy(ctx context.Context, req *builderv0.DeploymentRequest) (*builderv0.DeploymentResponse, error) {
 	defer s.Wool.Catch()
-
-	publicNetworkMappings := configurations.ExtractPublicNetworkMappings(req.NetworkMappings)
-
-	envs, err := configurations.ExtractEndpointEnvironmentVariables(ctx, publicNetworkMappings)
-	if err != nil {
-		return s.Builder.DeployError(err)
-	}
-
-	restEnvs, err := configurations.ExtractRestRoutesEnvironmentVariables(ctx, publicNetworkMappings)
-	if err != nil {
-		return s.Builder.DeployError(err)
-	}
-
-	envs = append(envs, restEnvs...)
-
-	cfMap, err := services.EnvsAsConfigMapData(envs)
-	if err != nil {
-		return s.Builder.DeployError(err)
-	}
-
-	params := services.DeploymentParameters{ConfigMap: cfMap}
-
-	err = s.Builder.GenericServiceDeploy(ctx, req, deploymentFS, params)
-	if err != nil {
-		return s.Builder.DeployError(err)
-	}
+	//
+	//publicNetworkMappings := configurations.ExtractPublicNetworkMappings(req.NetworkMappings)
+	//
+	//envs, err := configurations.ExtractEndpointEnvironmentVariables(ctx, publicNetworkMappings)
+	//if err != nil {
+	//	return s.Builder.DeployError(err)
+	//}
+	//
+	//restEnvs, err := configurations.ExtractRestRoutesEnvironmentVariables(ctx, publicNetworkMappings)
+	//if err != nil {
+	//	return s.Builder.DeployError(err)
+	//}
+	//
+	//envs = append(envs, restEnvs...)
+	//
+	//cfMap, err := services.EnvsAsConfigMapData(envs...)
+	//if err != nil {
+	//	return s.Builder.DeployError(err)
+	//}
+	//
+	//params := services.DeploymentParameters{ConfigMap: cfMap}
+	//
+	//err = s.Builder.GenericServiceDeploy(ctx, req, deploymentFS, params)
+	//if err != nil {
+	//	return s.Builder.DeployError(err)
+	//}
 	return s.Builder.DeployResponse()
 }
 
@@ -177,40 +174,19 @@ func (s *Builder) Create(ctx context.Context, req *builderv0.CreateRequest) (*bu
 		return s.Builder.CreateError(err)
 	}
 
-	s.Wool.Debug("removing node_modules")
-	err = os.RemoveAll(s.Local("node_modules"))
-	if err != nil {
-		return s.Builder.CreateError(err)
-	}
-
-	s.Wool.Debug("npm install")
-
-	s.Wool.Info("installing npm dependencies. Coffee time! ☕️")
-	runner, err := runners.NewRunner(ctx, "npm", "install", "ci")
-	if err != nil {
-		return s.Builder.CreateError(err)
-	}
-	runner.WithDir(s.sourceLocation)
-	runner.WithOut(s.Wool)
-
-	err = runner.Run()
-
-	if err != nil {
-		return s.Builder.CreateError(err)
-	}
-
-	s.Wool.Debug("npm install done")
-
 	return s.Builder.CreateResponse(ctx, s.Settings)
 }
 
 func (s *Builder) CreateEndpoint(ctx context.Context) error {
-	endpoint := s.Configuration.BaseEndpoint(standards.HTTP)
+	endpoint := s.Base.Service.BaseEndpoint(standards.HTTP)
 	endpoint.Visibility = configurations.VisibilityPublic
-	var err error
-	s.httpEndpoint, err = configurations.NewHTTPApi(ctx, endpoint)
+	http, err := configurations.LoadHTTPAPI(ctx)
 	if err != nil {
-		return s.Wool.Wrapf(err, "cannot create HTTP api")
+		return s.Wool.Wrapf(err, "cannot load HTTP api")
+	}
+	s.httpEndpoint, err = configurations.NewAPI(ctx, endpoint, configurations.ToHTTPAPI(http))
+	if err != nil {
+		return s.Wool.Wrapf(err, "cannot create openapi api")
 	}
 	s.Endpoints = []*basev0.Endpoint{s.httpEndpoint}
 	return nil

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/codefly-dev/core/agents/helpers/code"
 	"github.com/codefly-dev/core/configurations"
+	v0 "github.com/codefly-dev/core/generated/go/base/v0"
 	agentv0 "github.com/codefly-dev/core/generated/go/services/agent/v0"
 	runtimev0 "github.com/codefly-dev/core/generated/go/services/runtime/v0"
 	"github.com/codefly-dev/core/runners"
@@ -17,8 +18,8 @@ type Runtime struct {
 	*Service
 
 	// Internal
-	runner *runners.Runner
-	port   int32
+	runner runners.Runner
+	port   uint16
 }
 
 func NewRuntime() *Runtime {
@@ -30,69 +31,142 @@ func NewRuntime() *Runtime {
 func (s *Runtime) Load(ctx context.Context, req *runtimev0.LoadRequest) (*runtimev0.LoadResponse, error) {
 	defer s.Wool.Catch()
 
+	s.Runtime.Scope = req.Scope
+
 	err := s.Base.Load(ctx, req.Identity, s.Settings)
 	if err != nil {
 		return s.Base.Runtime.LoadError(err)
 	}
 
+	s.EnvironmentVariables.SetEnvironment(req.Environment)
+
 	s.sourceLocation = s.Local("src")
 
-	s.EnvironmentVariables = s.LoadEnvironmentVariables(req.Environment)
-
-	err = s.LoadEndpoints(ctx)
+	s.Endpoints, err = s.Base.Service.LoadEndpoints(ctx)
 	if err != nil {
 		return s.Base.Runtime.LoadError(err)
 	}
-	s.Wool.Focus("loading runtime", wool.NullableField("endpoints", configurations.MakeEndpointSummary(s.Endpoints)))
+
+	s.httpEndpoint, err = configurations.FindHTTPEndpoint(ctx, s.Endpoints)
+	if err != nil {
+		return s.Base.Runtime.LoadError(err)
+	}
+
 	return s.Base.Runtime.LoadResponse()
+}
+
+func (s *Runtime) nativeInitRunner(ctx context.Context) (runners.Runner, error) {
+	runner, err := runners.NewProcess(ctx, "npm", "install")
+	if err != nil {
+		return nil, err
+	}
+	runner.WithDir(s.sourceLocation)
+	runner.WithOut(s.Wool)
+	return runner, nil
+}
+
+func (s *Runtime) dockerInitRunner(ctx context.Context) (runners.Runner, error) {
+	runner, err := runners.NewDocker(ctx, runtimeImage)
+	if err != nil {
+		return nil, err
+	}
+
+	err = runner.Init(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	runner.WithMount(s.sourceLocation, "/app")
+	runner.WithWorkDir("/app")
+	runner.WithCommand("npm", "install")
+	runner.WithOut(s.Wool)
+	return runner, nil
 }
 
 func (s *Runtime) Init(ctx context.Context, req *runtimev0.InitRequest) (*runtimev0.InitResponse, error) {
 	defer s.Wool.Catch()
 
-	s.Wool.Focus("initialize runtime", wool.NullableField("dependency endpoints", configurations.MakeEndpointSummary(req.DependenciesEndpoints)))
+	s.Runtime.LogInitRequest(req)
 
 	s.NetworkMappings = req.ProposedNetworkMappings
 
-	net, err := configurations.FindNetworkMapping(s.httpEndpoint, s.NetworkMappings)
+	// Networking
+	instance, err := s.Runtime.NetworkInstance(s.NetworkMappings, s.httpEndpoint)
 	if err != nil {
 		return s.Runtime.InitError(err)
 	}
 
-	s.port = net.Port
+	s.LogForward("will run on http://localhost:%d", instance.Port)
+	s.port = uint16(instance.Port)
+
+	// npm install
+	var runner runners.Runner
+	switch s.Runtime.Scope {
+	case v0.RuntimeScope_Native:
+		runner, err = s.nativeInitRunner(ctx)
+	case v0.RuntimeScope_Container:
+		runner, err = s.dockerInitRunner(ctx)
+	}
+	if err != nil {
+		return s.Base.Runtime.InitError(err)
+	}
+	err = runner.Run(ctx)
+	if err != nil {
+		return s.Base.Runtime.InitError(err)
+	}
+
+	s.NetworkMappings = req.ProposedNetworkMappings
 
 	return s.Base.Runtime.InitResponse()
+}
+
+func (s *Runtime) nativeStartRunner(ctx context.Context) (runners.Runner, error) {
+	runner, err := runners.NewProcess(ctx, "npm", "run", "dev", "--", "-p", fmt.Sprintf("%d", s.port))
+	if err != nil {
+		return nil, err
+	}
+	runner.WithDir(s.sourceLocation)
+	runner.WithOut(s.Wool)
+	return runner, nil
+}
+
+func (s *Runtime) dockerStartRunner(ctx context.Context) (runners.Runner, error) {
+	runner, err := runners.NewDocker(ctx, runtimeImage)
+	if err != nil {
+		return nil, err
+	}
+
+	err = runner.Init(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	runner.WithPort(runners.DockerPortMapping{Container: uint16(s.port), Host: uint16(s.port)})
+	runner.WithName(s.Global())
+	runner.WithMount(s.sourceLocation, "/app")
+	runner.WithWorkDir("/app")
+	runner.WithCommand("npm", "run", "dev", "--", "-p", fmt.Sprintf("%d", s.port))
+	runner.WithOut(s.Wool)
+	return runner, nil
 }
 
 func (s *Runtime) Start(ctx context.Context, req *runtimev0.StartRequest) (*runtimev0.StartResponse, error) {
 	defer s.Wool.Catch()
 	ctx = s.Wool.Inject(ctx)
 
-	s.Wool.Debug("network mappings", wool.NullableField("other", configurations.MakeNetworkMappingSummary(req.OtherNetworkMappings)))
+	s.Runtime.LogStartRequest(req)
 
-	envs := s.EnvironmentVariables.GetBase()
-
-	publicNetworkMappings := configurations.ExtractPublicNetworkMappings(req.OtherNetworkMappings)
-
-	s.Wool.Focus("public network mappings", wool.NullableField("public", configurations.MakeNetworkMappingSummary(publicNetworkMappings)))
-
-	endpointEnvs, err := configurations.ExtractEndpointEnvironmentVariables(ctx, publicNetworkMappings)
+	err := s.EnvironmentVariables.AddPublicEndpoints(ctx, req.OtherNetworkMappings)
 	if err != nil {
-		return s.Base.Runtime.StartError(err, wool.InField("converting incoming network mappings"))
+		return s.Base.Runtime.StartError(err, wool.InField("adding external endpoints"))
 	}
 
-	envs = append(envs, endpointEnvs...)
-
-	restEnvs, err := configurations.ExtractRestRoutesEnvironmentVariables(ctx, publicNetworkMappings)
+	err = s.EnvironmentVariables.AddPublicRestRoutes(ctx, req.OtherNetworkMappings)
 	if err != nil {
-		return s.Base.Runtime.StartError(err, wool.InField("converting incoming network mappings"))
+		return s.Base.Runtime.StartError(err, wool.InField("adding rest routes"))
 	}
-
-	envs = append(envs, restEnvs...)
-
-	if err != nil {
-		return s.Base.Runtime.StartError(err)
-	}
+	envs := s.EnvironmentVariables.Get()
+	s.Wool.Focus("environment variables", wool.NullableField("envs", envs))
 
 	// Generate the .env.local
 	s.Wool.Debug("copying special files")
@@ -110,17 +184,18 @@ func (s *Runtime) Start(ctx context.Context, req *runtimev0.StartRequest) (*runt
 	}
 
 	runningContext := s.Wool.Inject(context.Background())
-	runner, err := runners.NewRunner(runningContext, "npm", "run", "dev", "--", "-p", fmt.Sprintf("%d", s.port))
+	var runner runners.Runner
+	switch s.Runtime.Scope {
+	case v0.RuntimeScope_Native:
+		runner, err = s.nativeStartRunner(ctx)
+	case v0.RuntimeScope_Container:
+		runner, err = s.dockerStartRunner(ctx)
+	}
+	err = runner.Start(runningContext)
 	if err != nil {
 		return s.Base.Runtime.StartError(err, wool.InField("runner"))
 	}
 	s.runner = runner
-	s.runner.WithDir(s.sourceLocation)
-
-	err = s.runner.Start()
-	if err != nil {
-		return s.Base.Runtime.StartError(err, wool.InField("runner"))
-	}
 
 	return s.Runtime.StartResponse()
 }
