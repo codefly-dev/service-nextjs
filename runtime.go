@@ -165,8 +165,8 @@ func (s *Runtime) Start(ctx context.Context, req *runtimev0.StartRequest) (*runt
 	if err != nil {
 		return s.Base.Runtime.StartError(err, wool.InField("adding rest routes"))
 	}
-	envs := s.EnvironmentVariables.Get()
-	s.Wool.Focus("environment variables", wool.NullableField("envs", envs))
+	envs := s.EnvironmentVariables.All()
+	s.Wool.Focus("environment variables", wool.Field("envs", envs))
 
 	// Generate the .env.local
 	s.Wool.Debug("copying special files")
