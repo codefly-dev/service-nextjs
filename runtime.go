@@ -91,7 +91,7 @@ func (s *Runtime) Init(ctx context.Context, req *runtimev0.InitRequest) (*runtim
 	s.NetworkMappings = req.ProposedNetworkMappings
 
 	// Networking
-	instance, err := s.Runtime.NetworkInstance(s.NetworkMappings, s.httpEndpoint)
+	instance, err := s.Runtime.NetworkInstance(ctx, s.NetworkMappings, s.httpEndpoint)
 	if err != nil {
 		return s.Runtime.InitError(err)
 	}
@@ -102,9 +102,9 @@ func (s *Runtime) Init(ctx context.Context, req *runtimev0.InitRequest) (*runtim
 	// npm install
 	var runner runners.Runner
 	switch s.Runtime.Scope {
-	case v0.RuntimeScope_Native:
+	case v0.NetworkScope_Native:
 		runner, err = s.nativeInitRunner(ctx)
-	case v0.RuntimeScope_Container:
+	case v0.NetworkScope_Container:
 		runner, err = s.dockerInitRunner(ctx)
 	}
 	if err != nil {
@@ -156,17 +156,17 @@ func (s *Runtime) Start(ctx context.Context, req *runtimev0.StartRequest) (*runt
 
 	s.Runtime.LogStartRequest(req)
 
-	err := s.EnvironmentVariables.AddPublicEndpoints(ctx, req.OtherNetworkMappings)
+	err := s.EnvironmentVariables.AddPublicEndpoints(ctx, req.DependenciesNetworkMappings)
 	if err != nil {
 		return s.Base.Runtime.StartError(err, wool.InField("adding external endpoints"))
 	}
 
-	err = s.EnvironmentVariables.AddPublicRestRoutes(ctx, req.OtherNetworkMappings)
+	err = s.EnvironmentVariables.AddPublicRestRoutes(ctx, req.DependenciesNetworkMappings)
 	if err != nil {
 		return s.Base.Runtime.StartError(err, wool.InField("adding rest routes"))
 	}
 	envs := s.EnvironmentVariables.All()
-	s.Wool.Focus("environment variables", wool.Field("envs", envs))
+	s.Wool.Debug("environment variables", wool.Field("envs", envs))
 
 	// Generate the .env.local
 	s.Wool.Debug("copying special files")
@@ -186,9 +186,9 @@ func (s *Runtime) Start(ctx context.Context, req *runtimev0.StartRequest) (*runt
 	runningContext := s.Wool.Inject(context.Background())
 	var runner runners.Runner
 	switch s.Runtime.Scope {
-	case v0.RuntimeScope_Native:
+	case v0.NetworkScope_Native:
 		runner, err = s.nativeStartRunner(ctx)
-	case v0.RuntimeScope_Container:
+	case v0.NetworkScope_Container:
 		runner, err = s.dockerStartRunner(ctx)
 	}
 	err = runner.Start(runningContext)

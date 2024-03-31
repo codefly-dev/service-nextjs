@@ -48,11 +48,10 @@ func (s *Builder) Init(ctx context.Context, req *builderv0.InitRequest) (*builde
 	defer s.Wool.Catch()
 	ctx = s.Wool.Inject(ctx)
 
-	s.NetworkMappings = req.ProposedNetworkMappings
-
 	s.Wool.In("Init").Debug("dependencies", wool.SliceCountField(req.DependenciesEndpoints))
 
 	s.DependencyEndpoints = req.DependenciesEndpoints
+
 	//hash, err := requirements.Hash(ctx)
 	//if err != nil {
 	//	return s.Builder.InitError(err)
@@ -73,17 +72,13 @@ func (s *Builder) Sync(ctx context.Context, req *builderv0.SyncRequest) (*builde
 	return s.Builder.SyncResponse()
 }
 
-type Env struct {
-	Key   string
-	Value string
-}
-
 type DockerTemplating struct {
-	Envs       []Env
 	Components []string
 }
 
 func (s *Builder) Build(ctx context.Context, req *builderv0.BuildRequest) (*builderv0.BuildResponse, error) {
+	defer s.Wool.Catch()
+
 	s.Wool.Debug("building docker image")
 	ctx = s.Wool.Inject(ctx)
 
@@ -122,32 +117,46 @@ func (s *Builder) Build(ctx context.Context, req *builderv0.BuildRequest) (*buil
 
 func (s *Builder) Deploy(ctx context.Context, req *builderv0.DeploymentRequest) (*builderv0.DeploymentResponse, error) {
 	defer s.Wool.Catch()
-	//
-	//publicNetworkMappings := configurations.ExtractPublicNetworkMappings(req.NetworkMappings)
-	//
-	//envs, err := configurations.ExtractEndpointEnvironmentVariables(ctx, publicNetworkMappings)
-	//if err != nil {
-	//	return s.Builder.DeployError(err)
-	//}
-	//
-	//restEnvs, err := configurations.ExtractRestRoutesEnvironmentVariables(ctx, publicNetworkMappings)
-	//if err != nil {
-	//	return s.Builder.DeployError(err)
-	//}
-	//
-	//envs = append(envs, restEnvs...)
-	//
-	//cfMap, err := services.EnvsAsConfigMapData(envs...)
-	//if err != nil {
-	//	return s.Builder.DeployError(err)
-	//}
-	//
-	//params := services.DeploymentParameters{ConfigMap: cfMap}
-	//
-	//err = s.Builder.GenericServiceDeploy(ctx, req, deploymentFS, params)
-	//if err != nil {
-	//	return s.Builder.DeployError(err)
-	//}
+
+	ctx = s.Wool.Inject(ctx)
+
+	s.Builder.LogDeployRequest(req, s.Wool.Focus)
+
+	err := s.EnvironmentVariables.AddPublicEndpoints(ctx, req.DependenciesNetworkMappings)
+	if err != nil {
+		return s.Base.Builder.DeployError(err)
+	}
+
+	err = s.EnvironmentVariables.AddPublicRestRoutes(ctx, req.DependenciesNetworkMappings)
+	if err != nil {
+		return s.Base.Builder.DeployError(err)
+	}
+
+	err = s.EnvironmentVariables.AddConfigurations(req.DependenciesConfigurations...)
+	if err != nil {
+		return s.Builder.DeployError(err)
+	}
+
+	cm, err := services.EnvsAsConfigMapData(s.EnvironmentVariables.Configurations()...)
+	if err != nil {
+		return s.Builder.DeployError(err)
+	}
+
+	secrets, err := services.EnvsAsSecretData(s.EnvironmentVariables.Secrets()...)
+	if err != nil {
+		return s.Builder.DeployError(err)
+	}
+
+	params := services.DeploymentParameters{
+		ConfigMap: cm,
+		SecretMap: secrets,
+	}
+
+	err = s.Builder.GenericServiceDeploy(ctx, req, deploymentFS, params)
+	if err != nil {
+		return s.Builder.DeployError(err)
+	}
+
 	return s.Builder.DeployResponse()
 }
 
