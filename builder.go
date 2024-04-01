@@ -126,12 +126,12 @@ func (s *Builder) Deploy(ctx context.Context, req *builderv0.DeploymentRequest) 
 
 	s.Builder.LogDeployRequest(req, s.Wool.Focus)
 
-	err := s.EnvironmentVariables.AddPublicEndpoints(ctx, req.DependenciesNetworkMappings)
+	err := s.EnvironmentVariables.AddEndpoints(ctx, req.DependenciesNetworkMappings, basev0.NetworkScope_Public)
 	if err != nil {
 		return s.Base.Builder.DeployError(err)
 	}
 
-	err = s.EnvironmentVariables.AddPublicRestRoutes(ctx, req.DependenciesNetworkMappings)
+	err = s.EnvironmentVariables.AddRestRoutes(ctx, req.DependenciesNetworkMappings, basev0.NetworkScope_Public)
 	if err != nil {
 		return s.Base.Builder.DeployError(err)
 	}

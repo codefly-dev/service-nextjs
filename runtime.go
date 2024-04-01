@@ -156,12 +156,12 @@ func (s *Runtime) Start(ctx context.Context, req *runtimev0.StartRequest) (*runt
 
 	s.Runtime.LogStartRequest(req)
 
-	err := s.EnvironmentVariables.AddPublicEndpoints(ctx, req.DependenciesNetworkMappings)
+	err := s.EnvironmentVariables.AddEndpoints(ctx, req.DependenciesNetworkMappings, v0.NetworkScope_Public)
 	if err != nil {
 		return s.Base.Runtime.StartError(err, wool.InField("adding external endpoints"))
 	}
 
-	err = s.EnvironmentVariables.AddPublicRestRoutes(ctx, req.DependenciesNetworkMappings)
+	err = s.EnvironmentVariables.AddRestRoutes(ctx, req.DependenciesNetworkMappings, v0.NetworkScope_Public)
 	if err != nil {
 		return s.Base.Runtime.StartError(err, wool.InField("adding rest routes"))
 	}

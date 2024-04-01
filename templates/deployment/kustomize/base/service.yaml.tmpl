@@ -5,7 +5,7 @@ metadata:
   namespace: "{{ .Namespace }}"
 spec:
   selector:
-    app: {{ .Service.Unique.DNSCase}}
+    app: {{ .Service.Name.DNSCase }}
   ports:
     - protocol: TCP
       name: http-port
