@@ -74,6 +74,8 @@ func (s *Builder) Sync(ctx context.Context, req *builderv0.SyncRequest) (*builde
 
 type DockerTemplating struct {
 	Components []string
+	Builder    string
+	Runner     string
 }
 
 func (s *Builder) Build(ctx context.Context, req *builderv0.BuildRequest) (*builderv0.BuildResponse, error) {
@@ -86,6 +88,8 @@ func (s *Builder) Build(ctx context.Context, req *builderv0.BuildRequest) (*buil
 	s.Wool.In("Build").Debug("dependencies", wool.SliceCountField(s.DependencyEndpoints))
 
 	docker := DockerTemplating{
+		Builder:    runtimeImage.FullName(),
+		Runner:     runtimeImage.FullName(),
 		Components: requirements.All(),
 	}
 

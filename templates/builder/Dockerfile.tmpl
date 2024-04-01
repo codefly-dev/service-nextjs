@@ -1,5 +1,5 @@
 # Build the Next.js application
-FROM node:18-alpine AS builder
+FROM {{.Builder}} AS builder
 
 WORKDIR /app
 
@@ -18,30 +18,28 @@ COPY {{.}} {{.}}
 RUN npm run build
 
 # Production environment
-FROM node:18-alpine AS production
+FROM {{.Runner}} AS production
 
+# Set working directory
 WORKDIR /app
 
-COPY --from=builder /app/package.json ./package.json
 
-# Install production dependencies only
+# Copy package.json and package-lock.json (or yarn.lock) for production dependencies
+COPY --from=builder /app/package*.json ./
+
+# Install only production dependencies
 RUN npm install --omit=dev
 
-# Set up a non-root user
+# Set up a non-root user for better security
 RUN adduser -D appuser
 USER appuser
-COPY --chown=appuser service.codefly.yaml /app/service.codefly.yaml
 
-# Copy the built Next.js application from the builder stage
-COPY --chown=appuser --from=builder /app/.next /app/.next
+# Copy the built Next.js application and other necessary files from the builder stage
+COPY --chown=appuser --from=builder /app/.next ./.next
+COPY --chown=appuser --from=builder /app/service.codefly.yaml ./service.codefly.yaml
 
-
-# Set the NODE_ENV environment variable to production
+# Environment variable to specify production mode
 ENV NODE_ENV production
 
-
-# Expose the port the app runs on
-EXPOSE 3000
-
-# Define the command to run the app
-CMD ["npm", "start"]
+# Command to start the Next.js application in production mode
+CMD ["npm", "run", "start"]
