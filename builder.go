@@ -12,6 +12,7 @@ import (
 	"github.com/codefly-dev/core/shared"
 	"github.com/codefly-dev/core/templates"
 	"github.com/codefly-dev/core/wool"
+	"path"
 )
 
 type Builder struct {
@@ -84,7 +85,13 @@ func (s *Builder) Build(ctx context.Context, req *builderv0.BuildRequest) (*buil
 	s.Wool.Debug("building docker image")
 	ctx = s.Wool.Inject(ctx)
 
-	image := s.DockerImage(req.BuildContext)
+	dockerRequest, err := s.Builder.DockerBuildRequest(ctx, req)
+	if err != nil {
+		return nil, s.Wool.Wrapf(err, "can only do docker build request")
+	}
+
+	image := s.DockerImage(dockerRequest)
+
 	s.Wool.In("Build").Debug("dependencies", wool.SliceCountField(s.DependencyEndpoints))
 
 	docker := DockerTemplating{
@@ -93,7 +100,7 @@ func (s *Builder) Build(ctx context.Context, req *builderv0.BuildRequest) (*buil
 		Components: requirements.All(),
 	}
 
-	err := shared.DeleteFile(ctx, s.Local("builder/Dockerfile"))
+	err = shared.DeleteFile(ctx, s.Local("builder/Dockerfile"))
 	if err != nil {
 		return nil, s.Wool.Wrapf(err, "cannot remove dockerfile")
 	}
@@ -119,6 +126,10 @@ func (s *Builder) Build(ctx context.Context, req *builderv0.BuildRequest) (*buil
 	s.Builder.WithDockerImages(image)
 
 	return &builderv0.BuildResponse{}, nil
+}
+
+type Deployment struct {
+	LoadBalancedHost string
 }
 
 func (s *Builder) Deploy(ctx context.Context, req *builderv0.DeploymentRequest) (*builderv0.DeploymentResponse, error) {
@@ -158,12 +169,36 @@ func (s *Builder) Deploy(ctx context.Context, req *builderv0.DeploymentRequest) 
 		SecretMap: secrets,
 	}
 
-	err = s.Builder.GenericServiceDeploy(ctx, req, deploymentFS, params)
-	if err != nil {
+	var k *builderv0.KubernetesDeployment
+	if k, err = s.Builder.KubernetesDeploymentRequest(ctx, req); err != nil {
 		return s.Builder.DeployError(err)
+	}
+	err = s.Builder.KustomizeDeploy(ctx, req.Environment, k, deploymentFS, params)
+
+	if req.Deployment.LoadBalancer {
+		inst, err := configurations.FindNetworkInstance(ctx, req.NetworkMappings, s.httpEndpoint, basev0.NetworkScope_Public)
+		if err != nil {
+			return s.Builder.DeployError(err)
+		}
+		params.Parameters = Deployment{LoadBalancedHost: inst.Host}
+		base := s.Builder.CreateKubernetesBase(req.Environment, k.Namespace, k.BuildContext)
+		err = s.deployKustomizeVirtualService(ctx, k, base, params)
+		if err != nil {
+			return s.Builder.DeployError(err)
+		}
 	}
 
 	return s.Builder.DeployResponse()
+}
+
+func (s *Builder) deployKustomizeVirtualService(ctx context.Context, k *builderv0.KubernetesDeployment, base *services.DeploymentBase, params any) error {
+	destination := path.Join(k.Destination, "applications", s.Base.Service.Application, "services", s.Base.Service.Name)
+	wrapper := &services.DeploymentWrapper{DeploymentBase: base, Parameters: params}
+	err := s.Templates(ctx, wrapper, services.WithDeployment(deploymentFS, "kustomize/overlays/virtualservice").WithDestination(path.Join(destination, "overlays", base.Environment.Name)))
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func (s *Builder) Create(ctx context.Context, req *builderv0.CreateRequest) (*builderv0.CreateResponse, error) {

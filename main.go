@@ -79,7 +79,9 @@ func NewService() *Service {
 }
 
 func main() {
-	agents.Register(services.NewServiceAgent(agent.Of(configurations.ServiceAgent), NewService()), services.NewBuilderAgent(agent.Of(configurations.RuntimeServiceAgent), NewBuilder()), services.NewRuntimeAgent(agent.Of(configurations.BuilderServiceAgent), NewRuntime()))
+	agents.Register(services.NewServiceAgent(agent.Of(configurations.ServiceAgent), NewService()),
+		services.NewBuilderAgent(agent.Of(configurations.RuntimeServiceAgent), NewBuilder()),
+		services.NewRuntimeAgent(agent.Of(configurations.BuilderServiceAgent), NewRuntime()))
 }
 
 //go:embed agent.codefly.yaml
