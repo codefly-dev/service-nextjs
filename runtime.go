@@ -12,14 +12,16 @@ import (
 	"github.com/codefly-dev/core/shared"
 	"github.com/codefly-dev/core/templates"
 	"github.com/codefly-dev/core/wool"
+	"github.com/hashicorp/go-multierror"
 )
 
 type Runtime struct {
 	*Service
 
 	// Internal
-	runner runners.Runner
-	port   uint16
+	runner       runners.Runner
+	otherRunners []runners.Runner
+	port         uint16
 }
 
 func NewRuntime() *Runtime {
@@ -100,6 +102,7 @@ func (s *Runtime) Init(ctx context.Context, req *runtimev0.InitRequest) (*runtim
 	s.port = uint16(instance.Port)
 
 	// npm install
+	s.LogForward("installing dependencies, may take a while")
 	var runner runners.Runner
 	switch s.Runtime.Scope {
 	case v0.NetworkScope_Native:
@@ -114,6 +117,8 @@ func (s *Runtime) Init(ctx context.Context, req *runtimev0.InitRequest) (*runtim
 	if err != nil {
 		return s.Base.Runtime.InitError(err)
 	}
+
+	s.otherRunners = append(s.otherRunners, runner)
 
 	s.NetworkMappings = req.ProposedNetworkMappings
 
@@ -206,17 +211,31 @@ func (s *Runtime) Information(ctx context.Context, req *runtimev0.InformationReq
 
 func (s *Runtime) Stop(ctx context.Context, req *runtimev0.StopRequest) (*runtimev0.StopResponse, error) {
 	defer s.Wool.Catch()
-
+	var agg error
 	s.Wool.Debug("stopping service")
-	err := s.runner.Stop()
-	if err != nil {
-		return nil, s.Wool.Wrapf(err, "cannot kill runner")
+	if s.runner != nil {
+		err := s.runner.Stop()
+		if err != nil {
+			agg = multierror.Append(agg, err)
+		}
 	}
-
+	for _, run := range s.otherRunners {
+		err := run.Stop()
+		if err != nil {
+			agg = multierror.Append(agg, err)
+			s.Wool.Warn("error stopping runner", wool.ErrField(err))
+		}
+	}
 	s.Wool.Debug("runner stopped")
-	err = s.Base.Stop()
+	err := s.Base.Stop()
 	if err != nil {
-		return nil, s.Wool.Wrapf(err, "cannot stop base")
+		if err != nil {
+			agg = multierror.Append(agg, err)
+			s.Wool.Warn("error stopping runner", wool.ErrField(err))
+		}
+	}
+	if agg != nil {
+		return s.Base.Runtime.StopError(agg)
 	}
 	return s.Runtime.StopResponse()
 }
