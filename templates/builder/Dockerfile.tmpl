@@ -2,8 +2,6 @@ FROM {{.Builder}} AS builder
 
 WORKDIR /app
 
-RUN echo "Invalid cache"
-
 # Copy package.json and package-lock.json (or yarn.lock)
 COPY src/package.json  ./
 
