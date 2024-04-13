@@ -191,7 +191,7 @@ func (s *Builder) Deploy(ctx context.Context, req *builderv0.DeploymentRequest) 
 		if err != nil {
 			return s.Builder.DeployError(err)
 		}
-		params.Parameters = Parameters{LoadBalancer{Host: inst.Host, Enabled: true}}
+		params.Parameters = Parameters{LoadBalancer{Host: inst.Hostname, Enabled: true}}
 	}
 	var k *builderv0.KubernetesDeployment
 	if k, err = s.Builder.KubernetesDeploymentRequest(ctx, req); err != nil {

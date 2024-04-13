@@ -63,7 +63,10 @@ func (s *Runtime) nativeInitRunner(ctx context.Context) (runners.Runner, error) 
 		return nil, err
 	}
 	runner.WithDir(s.sourceLocation)
-	runner.WithOut(s.Wool)
+	err = runner.WithOut(s.Logger)
+	if err != nil {
+		return nil, err
+	}
 	return runner, nil
 }
 
@@ -81,7 +84,7 @@ func (s *Runtime) dockerInitRunner(ctx context.Context) (runners.Runner, error) 
 	runner.WithMount(s.sourceLocation, "/app")
 	runner.WithWorkDir("/app")
 	runner.WithCommand("npm", "install")
-	runner.WithOut(s.Wool)
+	runner.WithOut(s.Logger)
 	return runner, nil
 }
 
@@ -110,8 +113,8 @@ func (s *Runtime) Init(ctx context.Context, req *runtimev0.InitRequest) (*runtim
 	case v0.NetworkScope_Container:
 		runner, err = s.dockerInitRunner(ctx)
 	}
-	if err != nil {
-		return s.Base.Runtime.InitError(err)
+	if runner == nil {
+		return s.Base.Runtime.InitError(s.Wool.NewError("no runner found"))
 	}
 	err = runner.Run(ctx)
 	if err != nil {
@@ -131,7 +134,10 @@ func (s *Runtime) nativeStartRunner(ctx context.Context) (runners.Runner, error)
 		return nil, err
 	}
 	runner.WithDir(s.sourceLocation)
-	runner.WithOut(s.Wool)
+	err = runner.WithOut(s.Logger)
+	if err != nil {
+		return nil, err
+	}
 	return runner, nil
 }
 
@@ -151,7 +157,7 @@ func (s *Runtime) dockerStartRunner(ctx context.Context) (runners.Runner, error)
 	runner.WithMount(s.sourceLocation, "/app")
 	runner.WithWorkDir("/app")
 	runner.WithCommand("npm", "run", "dev", "--", "-p", fmt.Sprintf("%d", s.port))
-	runner.WithOut(s.Wool)
+	runner.WithOut(s.Logger)
 	return runner, nil
 }
 
@@ -195,6 +201,9 @@ func (s *Runtime) Start(ctx context.Context, req *runtimev0.StartRequest) (*runt
 		runner, err = s.nativeStartRunner(ctx)
 	case v0.NetworkScope_Container:
 		runner, err = s.dockerStartRunner(ctx)
+	}
+	if runner == nil {
+		return s.Base.Runtime.StartError(s.Wool.NewError("no runner found"))
 	}
 	err = runner.Start(runningContext)
 	if err != nil {
