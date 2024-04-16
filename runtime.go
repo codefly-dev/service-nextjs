@@ -8,20 +8,21 @@ import (
 	v0 "github.com/codefly-dev/core/generated/go/base/v0"
 	agentv0 "github.com/codefly-dev/core/generated/go/services/agent/v0"
 	runtimev0 "github.com/codefly-dev/core/generated/go/services/runtime/v0"
-	"github.com/codefly-dev/core/runners"
+	runners "github.com/codefly-dev/core/runners/base"
 	"github.com/codefly-dev/core/shared"
 	"github.com/codefly-dev/core/templates"
 	"github.com/codefly-dev/core/wool"
 	"github.com/hashicorp/go-multierror"
+	"os"
 )
 
 type Runtime struct {
 	*Service
 
 	// Internal
-	runner       runners.Runner
-	otherRunners []runners.Runner
-	port         uint16
+	port              uint16
+	runner            runners.Proc
+	runnerEnvironment runners.RunnerEnvironment
 }
 
 func NewRuntime() *Runtime {
@@ -57,35 +58,45 @@ func (s *Runtime) Load(ctx context.Context, req *runtimev0.LoadRequest) (*runtim
 	return s.Base.Runtime.LoadResponse()
 }
 
-func (s *Runtime) nativeInitRunner(ctx context.Context) (runners.Runner, error) {
-	runner, err := runners.NewProcess(ctx, "npm", "install")
-	if err != nil {
-		return nil, err
-	}
-	runner.WithDir(s.sourceLocation)
-	err = runner.WithOut(s.Logger)
-	if err != nil {
-		return nil, err
-	}
-	return runner, nil
-}
+func (s *Runtime) CreateRunnerEnvironment(ctx context.Context) error {
+	s.Wool.Debug("creating runner environment in", wool.DirField(s.sourceLocation))
+	if s.Runtime.Container() {
+		s.Wool.Debug("running in container")
 
-func (s *Runtime) dockerInitRunner(ctx context.Context) (runners.Runner, error) {
-	runner, err := runners.NewDocker(ctx, runtimeImage)
-	if err != nil {
-		return nil, err
+		dockerEnv, err := runners.NewDockerEnvironment(ctx, runtimeImage, s.sourceLocation, s.UniqueWithProject())
+		if err != nil {
+			return s.Wool.Wrapf(err, "cannot create docker runner")
+		}
+		dockerEnv.WithPause()
+		err = dockerEnv.Clear(ctx)
+		if err != nil {
+			return s.Wool.Wrapf(err, "cannot clear the docker environment")
+		}
+		// Need to bind the ports
+		instance, err := configurations.FindNetworkInstanceInNetworkMappings(ctx, s.NetworkMappings, s.httpEndpoint, s.Runtime.Scope)
+		if err != nil {
+			return s.Wool.Wrapf(err, "cannot find network instance")
+		}
+		dockerEnv.WithPort(ctx, uint16(instance.Port))
+		modulesPath := s.DockerNodeModulesPath()
+		_, err = shared.CheckDirectoryOrCreate(ctx, modulesPath)
+		if err != nil {
+			return s.Wool.Wrapf(err, "cannot create docker venv environment")
+		}
+		dockerEnv.WithMount(modulesPath, "/codefly/node_modules")
+		s.runnerEnvironment = dockerEnv
+	} else {
+		s.Wool.Debug("running locally")
+		localEnv, err := runners.NewLocalEnvironment(ctx, s.sourceLocation)
+		if err != nil {
+			return s.Wool.Wrapf(err, "cannot create local runner")
+		}
+		// HACK
+		localEnv.WithEnvironmentVariables(configurations.Env("PATH", os.Getenv("PATH")))
+		s.runnerEnvironment = localEnv
 	}
-
-	err = runner.Init(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	runner.WithMount(s.sourceLocation, "/app")
-	runner.WithWorkDir("/app")
-	runner.WithCommand("npm", "install")
-	runner.WithOut(s.Logger)
-	return runner, nil
+	s.runnerEnvironment.WithEnvironmentVariables(s.EnvironmentVariables.All()...)
+	return nil
 }
 
 func (s *Runtime) Init(ctx context.Context, req *runtimev0.InitRequest) (*runtimev0.InitResponse, error) {
@@ -104,61 +115,30 @@ func (s *Runtime) Init(ctx context.Context, req *runtimev0.InitRequest) (*runtim
 	s.LogForward("will run on http://localhost:%d", instance.Port)
 	s.port = uint16(instance.Port)
 
-	// npm install
-	s.LogForward("installing dependencies, may take a while")
-	var runner runners.Runner
-	switch s.Runtime.Scope {
-	case v0.NetworkScope_Native:
-		runner, err = s.nativeInitRunner(ctx)
-	case v0.NetworkScope_Container:
-		runner, err = s.dockerInitRunner(ctx)
-	}
-	if runner == nil {
-		return s.Base.Runtime.InitError(s.Wool.NewError("no runner found"))
-	}
-	err = runner.Run(ctx)
+	err = s.CreateRunnerEnvironment(ctx)
 	if err != nil {
-		return s.Base.Runtime.InitError(err)
+		return s.Runtime.InitError(err)
 	}
 
-	s.otherRunners = append(s.otherRunners, runner)
+	// npm install
+	s.LogForward("installing dependencies, may take a while")
+	proc, err := s.runnerEnvironment.NewProcess("npm", "install")
+	if err != nil {
+		return s.Runtime.InitError(err)
+	}
+
+	err = proc.Run(ctx)
+	if err != nil {
+		return s.Runtime.InitError(err)
+	}
 
 	s.NetworkMappings = req.ProposedNetworkMappings
 
 	return s.Base.Runtime.InitResponse()
 }
 
-func (s *Runtime) nativeStartRunner(ctx context.Context) (runners.Runner, error) {
-	runner, err := runners.NewProcess(ctx, "npm", "run", "dev", "--", "-p", fmt.Sprintf("%d", s.port))
-	if err != nil {
-		return nil, err
-	}
-	runner.WithDir(s.sourceLocation)
-	err = runner.WithOut(s.Logger)
-	if err != nil {
-		return nil, err
-	}
-	return runner, nil
-}
-
-func (s *Runtime) dockerStartRunner(ctx context.Context) (runners.Runner, error) {
-	runner, err := runners.NewDocker(ctx, runtimeImage)
-	if err != nil {
-		return nil, err
-	}
-
-	err = runner.Init(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	runner.WithPort(runners.DockerPortMapping{Container: uint16(s.port), Host: uint16(s.port)})
-	runner.WithName(s.Global())
-	runner.WithMount(s.sourceLocation, "/app")
-	runner.WithWorkDir("/app")
-	runner.WithCommand("npm", "run", "dev", "--", "-p", fmt.Sprintf("%d", s.port))
-	runner.WithOut(s.Logger)
-	return runner, nil
+func (s *Runtime) DockerNodeModulesPath() string {
+	return s.Local(".cache/container/node_modules")
 }
 
 func (s *Runtime) Start(ctx context.Context, req *runtimev0.StartRequest) (*runtimev0.StartResponse, error) {
@@ -195,21 +175,16 @@ func (s *Runtime) Start(ctx context.Context, req *runtimev0.StartRequest) (*runt
 	}
 
 	runningContext := s.Wool.Inject(context.Background())
-	var runner runners.Runner
-	switch s.Runtime.Scope {
-	case v0.NetworkScope_Native:
-		runner, err = s.nativeStartRunner(ctx)
-	case v0.NetworkScope_Container:
-		runner, err = s.dockerStartRunner(ctx)
+	proc, err := s.runnerEnvironment.NewProcess("npm", "run", "dev", "--", "-p", fmt.Sprintf("%d", s.port))
+	if err != nil {
+		return s.Runtime.StartError(err, wool.InField("runner"))
 	}
-	if runner == nil {
-		return s.Base.Runtime.StartError(s.Wool.NewError("no runner found"))
-	}
-	err = runner.Start(runningContext)
+	proc.WithOutput(s.Logger)
+	s.runner = proc
+	err = s.runner.Start(runningContext)
 	if err != nil {
 		return s.Base.Runtime.StartError(err, wool.InField("runner"))
 	}
-	s.runner = runner
 
 	return s.Runtime.StartResponse()
 }
@@ -223,25 +198,16 @@ func (s *Runtime) Stop(ctx context.Context, req *runtimev0.StopRequest) (*runtim
 	var agg error
 	s.Wool.Debug("stopping service")
 	if s.runner != nil {
-		err := s.runner.Stop()
+		err := s.runner.Stop(ctx)
 		if err != nil {
 			agg = multierror.Append(agg, err)
-		}
-	}
-	for _, run := range s.otherRunners {
-		err := run.Stop()
-		if err != nil {
-			agg = multierror.Append(agg, err)
-			s.Wool.Warn("error stopping runner", wool.ErrField(err))
 		}
 	}
 	s.Wool.Debug("runner stopped")
 	err := s.Base.Stop()
 	if err != nil {
-		if err != nil {
-			agg = multierror.Append(agg, err)
-			s.Wool.Warn("error stopping runner", wool.ErrField(err))
-		}
+		agg = multierror.Append(agg, err)
+		s.Wool.Warn("error stopping runner", wool.ErrField(err))
 	}
 	if agg != nil {
 		return s.Base.Runtime.StopError(agg)
