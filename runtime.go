@@ -120,6 +120,11 @@ func (s *Runtime) Init(ctx context.Context, req *runtimev0.InitRequest) (*runtim
 		return s.Runtime.InitError(err)
 	}
 
+	err = s.runnerEnvironment.Init(ctx)
+	if err != nil {
+		return s.Runtime.InitError(err)
+	}
+
 	// npm install
 	s.LogForward("installing dependencies, may take a while")
 	proc, err := s.runnerEnvironment.NewProcess("npm", "install")

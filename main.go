@@ -23,9 +23,8 @@ import (
 var agent = shared.Must(configurations.LoadFromFs[configurations.Agent](shared.Embed(infoFS)))
 
 var requirements = builders.NewDependencies(agent.Name,
-	builders.NewDependency("service.codefly.yaml"),
 	builders.NewDependency("src").WithPathSelect(shared.NewIgnore("src/node_modules/*")),
-)
+	builders.NewDependency("service.codefly.yaml"))
 
 type Settings struct {
 	DeveloperDebug bool `yaml:"debug"` // Developer only
