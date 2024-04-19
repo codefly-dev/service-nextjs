@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/codefly-dev/core/agents/helpers/code"
+	"github.com/codefly-dev/core/builders"
 	"github.com/codefly-dev/core/configurations"
 	v0 "github.com/codefly-dev/core/generated/go/base/v0"
 	agentv0 "github.com/codefly-dev/core/generated/go/services/agent/v0"
@@ -23,6 +24,7 @@ type Runtime struct {
 	port              uint16
 	runner            runners.Proc
 	runnerEnvironment runners.RunnerEnvironment
+	cacheLocation     string
 }
 
 func NewRuntime() *Runtime {
@@ -84,6 +86,10 @@ func (s *Runtime) CreateRunnerEnvironment(ctx context.Context) error {
 			return s.Wool.Wrapf(err, "cannot create docker venv environment")
 		}
 		dockerEnv.WithMount(modulesPath, "/codefly/node_modules")
+		s.cacheLocation, err = s.LocalDirCreate(ctx, ".cache/container")
+		if err != nil {
+			return s.Wool.Wrapf(err, "cannot create cache location")
+		}
 		s.runnerEnvironment = dockerEnv
 	} else {
 		s.Wool.Debug("running locally")
@@ -93,6 +99,10 @@ func (s *Runtime) CreateRunnerEnvironment(ctx context.Context) error {
 		}
 		// HACK
 		localEnv.WithEnvironmentVariables(configurations.Env("PATH", os.Getenv("PATH")))
+		s.cacheLocation, err = s.LocalDirCreate(ctx, ".cache/local")
+		if err != nil {
+			return s.Wool.Wrapf(err, "cannot create cache location")
+		}
 		s.runnerEnvironment = localEnv
 	}
 	s.runnerEnvironment.WithEnvironmentVariables(s.EnvironmentVariables.All()...)
@@ -125,16 +135,25 @@ func (s *Runtime) Init(ctx context.Context, req *runtimev0.InitRequest) (*runtim
 		return s.Runtime.InitError(err)
 	}
 
-	// npm install
-	s.LogForward("installing dependencies, may take a while")
-	proc, err := s.runnerEnvironment.NewProcess("npm", "install")
+	deps := builders.NewDependencies("package", builders.NewDependency(s.Local(s.sourceLocation, "package.json"))).WithCache(s.cacheLocation)
+	depsUpdate, err := deps.Updated(ctx)
 	if err != nil {
 		return s.Runtime.InitError(err)
 	}
+	if depsUpdate {
+		s.LogForward("update npm packages")
+		// npm install
+		s.LogForward("installing dependencies, may take a while")
+		proc, err := s.runnerEnvironment.NewProcess("npm", "install")
+		if err != nil {
+			return s.Runtime.InitError(err)
+		}
 
-	err = proc.Run(ctx)
-	if err != nil {
-		return s.Runtime.InitError(err)
+		err = proc.Run(ctx)
+		if err != nil {
+			return s.Runtime.InitError(err)
+		}
+		err = deps.UpdateCache(ctx)
 	}
 
 	s.NetworkMappings = req.ProposedNetworkMappings
