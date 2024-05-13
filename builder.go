@@ -5,11 +5,11 @@ import (
 	"embed"
 	dockerhelpers "github.com/codefly-dev/core/agents/helpers/docker"
 	"github.com/codefly-dev/core/agents/services"
-	"github.com/codefly-dev/core/configurations"
-	"github.com/codefly-dev/core/configurations/standards"
 	basev0 "github.com/codefly-dev/core/generated/go/base/v0"
 	builderv0 "github.com/codefly-dev/core/generated/go/services/builder/v0"
+	"github.com/codefly-dev/core/resources"
 	"github.com/codefly-dev/core/shared"
+	"github.com/codefly-dev/core/standards"
 	"github.com/codefly-dev/core/templates"
 	"github.com/codefly-dev/core/wool"
 )
@@ -34,12 +34,13 @@ func (s *Builder) Load(ctx context.Context, req *builderv0.LoadRequest) (*builde
 
 	s.sourceLocation, err = s.LocalDirCreate(ctx, "src")
 
-	s.Builder.GettingStarted, err = templates.ApplyTemplateFrom(ctx, shared.Embed(factoryFS), "templates/factory/GETTING_STARTED.md", s.Information)
-	if err != nil {
-		return s.Builder.LoadError(err)
-	}
+	if req.CreationMode != nil {
+		s.Builder.CreationMode = req.CreationMode
+		s.Builder.GettingStarted, err = templates.ApplyTemplateFrom(ctx, shared.Embed(factoryFS), "templates/factory/GETTING_STARTED.md", s.Information)
+		if err != nil {
+			return s.Builder.LoadError(err)
+		}
 
-	if req.AtCreate {
 		return s.Builder.LoadResponse()
 	}
 
@@ -48,7 +49,7 @@ func (s *Builder) Load(ctx context.Context, req *builderv0.LoadRequest) (*builde
 		return s.Builder.LoadError(err)
 	}
 
-	s.httpEndpoint, err = configurations.FindHTTPEndpoint(ctx, s.Endpoints)
+	s.HttpEndpoint, err = resources.FindHTTPEndpoint(ctx, s.Endpoints)
 	if err != nil {
 		return s.Builder.LoadError(err)
 	}
@@ -155,14 +156,14 @@ func (s *Builder) Deploy(ctx context.Context, req *builderv0.DeploymentRequest) 
 
 	s.Builder.LogDeployRequest(req, s.Wool.Focus)
 
-	err := s.EnvironmentVariables.AddEndpoints(ctx, req.DependenciesNetworkMappings, basev0.NetworkScope_Public)
+	err := s.EnvironmentVariables.AddEndpoints(ctx, req.DependenciesNetworkMappings, resources.NewPublicNetworkAccess())
 	if err != nil {
-		return s.Base.Builder.DeployError(err)
+		return s.Builder.DeployError(err)
 	}
 
-	err = s.EnvironmentVariables.AddRestRoutes(ctx, req.DependenciesNetworkMappings, basev0.NetworkScope_Public)
+	err = s.EnvironmentVariables.AddRestRoutes(ctx, req.DependenciesNetworkMappings, resources.NewPublicNetworkAccess())
 	if err != nil {
-		return s.Base.Builder.DeployError(err)
+		return s.Builder.DeployError(err)
 	}
 
 	err = s.EnvironmentVariables.AddConfigurations(req.DependenciesConfigurations...)
@@ -187,7 +188,7 @@ func (s *Builder) Deploy(ctx context.Context, req *builderv0.DeploymentRequest) 
 	}
 
 	if req.Deployment.LoadBalancer {
-		inst, err := configurations.FindNetworkInstanceInNetworkMappings(ctx, req.NetworkMappings, s.httpEndpoint, basev0.NetworkScope_Public)
+		inst, err := resources.FindNetworkInstanceInNetworkMappings(ctx, req.NetworkMappings, s.HttpEndpoint, resources.NewPublicNetworkAccess())
 		if err != nil {
 			return s.Builder.DeployError(err)
 		}
@@ -234,16 +235,16 @@ func (s *Builder) Create(ctx context.Context, req *builderv0.CreateRequest) (*bu
 
 func (s *Builder) CreateEndpoint(ctx context.Context) error {
 	endpoint := s.Base.Service.BaseEndpoint(standards.HTTP)
-	endpoint.Visibility = configurations.VisibilityPublic
-	http, err := configurations.LoadHTTPAPI(ctx)
+	endpoint.Visibility = resources.VisibilityPublic
+	http, err := resources.LoadHTTPAPI(ctx)
 	if err != nil {
 		return s.Wool.Wrapf(err, "cannot load HTTP api")
 	}
-	s.httpEndpoint, err = configurations.NewAPI(ctx, endpoint, configurations.ToHTTPAPI(http))
+	s.HttpEndpoint, err = resources.NewAPI(ctx, endpoint, resources.ToHTTPAPI(http))
 	if err != nil {
 		return s.Wool.Wrapf(err, "cannot create openapi api")
 	}
-	s.Endpoints = []*basev0.Endpoint{s.httpEndpoint}
+	s.Endpoints = []*basev0.Endpoint{s.HttpEndpoint}
 	return nil
 }
 

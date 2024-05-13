@@ -16,6 +16,8 @@ COPY {{.}} .
 # Build the application
 RUN npm run build
 
+COPY service.codefly.yaml .
+
 # Production environment
 FROM {{.Runner}} AS production
 
