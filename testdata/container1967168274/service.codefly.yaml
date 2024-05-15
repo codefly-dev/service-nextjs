@@ -1,0 +1,9 @@
+name: svc-1715794046880
+version: test-me
+module: mod
+agent: null
+endpoints:
+    - name: http
+      visibility: public
+spec:
+    debug: false

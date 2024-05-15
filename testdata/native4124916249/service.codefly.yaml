@@ -1,0 +1,9 @@
+name: svc-1715794324855
+version: FIXME
+module: mod
+agent: null
+endpoints:
+    - name: http
+      visibility: public
+spec:
+    debug: false
