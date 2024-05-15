@@ -6,12 +6,14 @@ import (
 	"fmt"
 	"github.com/codefly-dev/core/agents"
 	runtimev0 "github.com/codefly-dev/core/generated/go/services/runtime/v0"
+	"github.com/codefly-dev/core/languages"
 	"github.com/codefly-dev/core/network"
 	"github.com/codefly-dev/core/shared"
 	"github.com/codefly-dev/core/wool"
 	"github.com/stretchr/testify/require"
 	"io"
 	"net/http"
+	"os"
 	"testing"
 	"time"
 
@@ -22,12 +24,11 @@ import (
 	basev0 "github.com/codefly-dev/core/generated/go/base/v0"
 )
 
-// FIX NATIVE
-//func TestCreateToRunNative(t *testing.T) {
-//	if languages.HasNodeRuntime(nil) {
-//		testCreateToRun(t, resources.NewRuntimeContextNative())
-//	}
-//}
+func TestCreateToRunNative(t *testing.T) {
+	if languages.HasNodeRuntime(nil) {
+		testCreateToRun(t, resources.NewRuntimeContextNative())
+	}
+}
 
 func TestCreateToRunDocker(t *testing.T) {
 	testCreateToRun(t, resources.NewRuntimeContextContainer())
@@ -39,18 +40,23 @@ func testCreateToRun(t *testing.T, runtimeContext *basev0.RuntimeContext) {
 
 	workspace := &resources.Workspace{Name: "test"}
 	ctx := context.Background()
-	tmpDir := shared.MustSolvePath("testdata")
+
+	tmpDir, err := os.MkdirTemp("testdata", runtimeContext.Kind)
+	tmpDir = shared.MustSolvePath(tmpDir)
+	require.NoError(t, err)
 	defer func(path string) {
-		_ = shared.EmptyDir(ctx, path)
+		err = os.RemoveAll(tmpDir)
+		require.NoError(t, err)
 	}(tmpDir)
 
 	serviceName := fmt.Sprintf("svc-%v", time.Now().UnixMilli())
-	service := resources.Service{Name: serviceName, Module: "mod", Version: "test-me"}
-	err := service.SaveAtDir(ctx, tmpDir)
+	service := resources.Service{Name: serviceName, Module: "mod", Version: "FIXME"}
+	err = service.SaveAtDir(ctx, tmpDir)
 	require.NoError(t, err)
 
 	identity := &basev0.ServiceIdentity{
 		Name:      service.Name,
+		Version:   service.Version,
 		Module:    service.Module,
 		Workspace: workspace.Name,
 		Location:  tmpDir,
@@ -90,11 +96,10 @@ func testCreateToRun(t *testing.T, runtimeContext *basev0.RuntimeContext) {
 
 	testRun(t, runtime, ctx, identity, runtimeContext, networkMappings)
 
-	// FIX ME
-	//_, err = runtime.Stop(ctx, &runtimev0.StopRequest{})
-	//require.NoError(t, err)
-	//
-	//// Running again should work
+	_, err = runtime.Stop(ctx, &runtimev0.StopRequest{})
+	require.NoError(t, err)
+
+	// Running again should work
 	//testRun(t, runtime, ctx, identity, runtimeContext, networkMappings)
 
 	_, err = runtime.Destroy(ctx, &runtimev0.DestroyRequest{})
@@ -148,7 +153,7 @@ func testRun(t *testing.T, runtime *Runtime, ctx context.Context, identity *base
 
 		version, ok := data["version"].(string)
 		require.True(t, ok)
-		require.Equal(t, "FIXME", version)
+		require.Equal(t, identity.Version, version)
 		return
 	}
 }

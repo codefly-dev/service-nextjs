@@ -69,8 +69,6 @@ func (s *Runtime) Load(ctx context.Context, req *runtimev0.LoadRequest) (*runtim
 func (s *Runtime) CreateRunnerEnvironment(ctx context.Context) error {
 	s.Wool.Debug("creating runner environment in", wool.DirField(s.sourceLocation))
 	if s.Runtime.IsContainerRuntime() {
-		s.Wool.Debug("running in container", wool.NameField(s.UniqueWithWorkspace()))
-
 		dockerEnv, err := runners.NewDockerEnvironment(ctx, runtimeImage, s.sourceLocation, s.UniqueWithWorkspace())
 		if err != nil {
 			return s.Wool.Wrapf(err, "cannot create docker runner")
@@ -94,12 +92,11 @@ func (s *Runtime) CreateRunnerEnvironment(ctx context.Context) error {
 		}
 		s.runnerEnvironment = dockerEnv
 	} else {
-		s.Wool.Debug("running locally")
 		localEnv, err := runners.NewNativeEnvironment(ctx, s.sourceLocation)
 		if err != nil {
 			return s.Wool.Wrapf(err, "cannot create local runner")
 		}
-		err = s.runnerEnvironment.WithBinary("node")
+		err = localEnv.WithBinary("node")
 		if err != nil {
 			return s.Wool.Wrapf(err, "cannot find node binary")
 		}
@@ -196,15 +193,16 @@ func (s *Runtime) Start(ctx context.Context, req *runtimev0.StartRequest) (*runt
 
 	s.Runtime.LogStartRequest(req)
 
-	err := s.EnvironmentVariables.AddEndpoints(ctx, req.DependenciesNetworkMappings, resources.NewNativeNetworkAccess())
+	err := s.EnvironmentVariables.AddEndpoints(ctx, req.DependenciesNetworkMappings, resources.NewPublicNetworkAccess())
 	if err != nil {
 		return s.Runtime.StartErrorf(err, "adding external endpoints")
 	}
 
-	err = s.EnvironmentVariables.AddRestRoutes(ctx, req.DependenciesNetworkMappings, resources.NewNativeNetworkAccess())
+	err = s.EnvironmentVariables.AddRestRoutes(ctx, req.DependenciesNetworkMappings, resources.NewPublicNetworkAccess())
 	if err != nil {
 		return s.Runtime.StartErrorf(err, "adding rest routes")
 	}
+
 	envs := s.EnvironmentVariables.All()
 	s.Wool.Debug("environment variables", wool.Field("envs", envs))
 
