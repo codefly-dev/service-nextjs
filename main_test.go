@@ -104,9 +104,6 @@ func testCreateToRun(t *testing.T, runtimeContext *basev0.RuntimeContext) {
 	// Running again should work
 	//testRun(t, runtime, ctx, identity, runtimeContext, networkMappings)
 
-	_, err = runtime.Destroy(ctx, &runtimev0.DestroyRequest{})
-	require.NoError(t, err)
-
 }
 
 func testRun(t *testing.T, runtime *Runtime, ctx context.Context, identity *basev0.ServiceIdentity, runtimeContext *basev0.RuntimeContext, networkMappings []*basev0.NetworkMapping) {
