@@ -208,7 +208,7 @@ func (s *Runtime) Start(ctx context.Context, req *runtimev0.StartRequest) (*runt
 	s.Wool.Debug("copying special files")
 	err = templates.CopyAndApplyTemplate(ctx, shared.Embed(specialFS),
 		"templates/factory/special/env.local.tmpl",
-		s.Local("src/.env.local"), envs)
+		s.Local("code/.env.local"), envs)
 	if err != nil {
 		return s.Runtime.StartErrorf(err, "copying special files")
 	}

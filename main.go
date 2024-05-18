@@ -23,7 +23,7 @@ import (
 var agent = shared.Must(resources.LoadFromFs[resources.Agent](shared.Embed(infoFS)))
 
 var requirements = builders.NewDependencies(agent.Name,
-	builders.NewDependency("src").WithPathSelect(shared.NewIgnore("src/node_modules/*")))
+	builders.NewDependency("code").WithPathSelect(shared.NewIgnore("code/node_modules/*")))
 
 var runtimeImage = &resources.DockerImage{Name: "codeflydev/node", Tag: "0.0.5"}
 

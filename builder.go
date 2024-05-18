@@ -32,7 +32,7 @@ func (s *Builder) Load(ctx context.Context, req *builderv0.LoadRequest) (*builde
 		return nil, err
 	}
 
-	s.sourceLocation, err = s.LocalDirCreate(ctx, "src")
+	s.sourceLocation, err = s.LocalDirCreate(ctx, "code")
 
 	if req.CreationMode != nil {
 		s.Builder.CreationMode = req.CreationMode
@@ -225,7 +225,7 @@ func (s *Builder) Create(ctx context.Context, req *builderv0.CreateRequest) (*bu
 	// Need to handle the case of pages/_aps.tsx
 	err = templates.Copy(ctx, shared.Embed(specialFS),
 		"templates/factory/special/pages/app.tsx",
-		s.Local("src/pages/_app.tsx"))
+		s.Local("code/pages/_app.tsx"))
 	if err != nil {
 		return s.Builder.CreateError(err)
 	}
