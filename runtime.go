@@ -18,8 +18,6 @@ import (
 	"path"
 )
 
-var runtimeImage = &resources.DockerImage{Name: "codeflydev/node", Tag: "0.0.4"}
-
 type Runtime struct {
 	*Service
 
@@ -51,7 +49,7 @@ func (s *Runtime) Load(ctx context.Context, req *runtimev0.LoadRequest) (*runtim
 
 	s.EnvironmentVariables.SetEnvironment(req.Environment)
 
-	s.sourceLocation = s.Local("src")
+	s.sourceLocation = s.Local("code")
 
 	s.Endpoints, err = s.Base.Service.LoadEndpoints(ctx)
 	if err != nil {
