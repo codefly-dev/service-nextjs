@@ -25,7 +25,7 @@ var agent = shared.Must(resources.LoadFromFs[resources.Agent](shared.Embed(infoF
 var requirements = builders.NewDependencies(agent.Name,
 	builders.NewDependency("code").WithPathSelect(shared.NewIgnore("code/node_modules/*")))
 
-var runtimeImage = &resources.DockerImage{Name: "codeflydev/node", Tag: "0.0.5"}
+var runtimeImage = &resources.DockerImage{Name: "codeflydev/node", Tag: "0.0.6"}
 
 type Settings struct {
 	DeveloperDebug bool `yaml:"debug"` // Developer only
