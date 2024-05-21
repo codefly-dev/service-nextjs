@@ -65,9 +65,9 @@ func (s *Runtime) Load(ctx context.Context, req *runtimev0.LoadRequest) (*runtim
 }
 
 func (s *Runtime) CreateRunnerEnvironment(ctx context.Context) error {
-	s.Wool.Debug("creating runner environment in", wool.DirField(s.sourceLocation))
+	s.Wool.Debug("creating runner environment in", wool.DirField(s.Identity.WorkspacePath))
 	if s.Runtime.IsContainerRuntime() {
-		dockerEnv, err := runners.NewDockerEnvironment(ctx, runtimeImage, s.sourceLocation, s.UniqueWithWorkspace())
+		dockerEnv, err := runners.NewDockerEnvironment(ctx, runtimeImage, s.Identity.WorkspacePath, s.UniqueWithWorkspace())
 		if err != nil {
 			return s.Wool.Wrapf(err, "cannot create docker runner")
 		}
@@ -83,8 +83,10 @@ func (s *Runtime) CreateRunnerEnvironment(ctx context.Context) error {
 		if err != nil {
 			return s.Wool.Wrapf(err, "cannot create docker venv environment")
 		}
-		dockerEnv.WithMount(modulesPath, "/codefly/node_modules")
+
+		dockerEnv.WithMount(modulesPath, path.Join(s.sourceLocation, "node_modules"))
 		s.cacheLocation, err = s.LocalDirCreate(ctx, ".cache/container")
+
 		if err != nil {
 			return s.Wool.Wrapf(err, "cannot create cache location")
 		}
@@ -169,6 +171,7 @@ func (s *Runtime) Init(ctx context.Context, req *runtimev0.InitRequest) (*runtim
 			return s.Runtime.InitError(err)
 		}
 
+		proc.WithDir(s.sourceLocation)
 		err = proc.Run(ctx)
 		if err != nil {
 			return s.Runtime.InitError(err)
@@ -225,6 +228,8 @@ func (s *Runtime) Start(ctx context.Context, req *runtimev0.StartRequest) (*runt
 		return s.Runtime.StartErrorf(err, "runner")
 	}
 	proc.WithOutput(s.Logger)
+	proc.WithDir(s.sourceLocation)
+
 	s.runner = proc
 	err = s.runner.Start(runningContext)
 	if err != nil {
