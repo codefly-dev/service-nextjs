@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"github.com/codefly-dev/core/agents/helpers/code"
 	"github.com/codefly-dev/core/builders"
-	agentv0 "github.com/codefly-dev/core/generated/go/services/agent/v0"
-	runtimev0 "github.com/codefly-dev/core/generated/go/services/runtime/v0"
+	agentv0 "github.com/codefly-dev/core/generated/go/codefly/services/agent/v0"
+	runtimev0 "github.com/codefly-dev/core/generated/go/codefly/services/runtime/v0"
 	"github.com/codefly-dev/core/languages"
 	"github.com/codefly-dev/core/resources"
 	runners "github.com/codefly-dev/core/runners/base"
@@ -100,14 +100,14 @@ func (s *Runtime) CreateRunnerEnvironment(ctx context.Context) error {
 		if err != nil {
 			return s.Wool.Wrapf(err, "cannot find node binary")
 		}
-		localEnv.WithEnvironmentVariables(resources.Env("PATH", os.Getenv("PATH")))
+		localEnv.WithEnvironmentVariables(ctx, resources.Env("PATH", os.Getenv("PATH")))
 		s.cacheLocation, err = s.LocalDirCreate(ctx, ".cache/local")
 		if err != nil {
 			return s.Wool.Wrapf(err, "cannot create cache location")
 		}
 		s.runnerEnvironment = localEnv
 	}
-	s.runnerEnvironment.WithEnvironmentVariables(s.EnvironmentVariables.All()...)
+	s.runnerEnvironment.WithEnvironmentVariables(ctx, s.EnvironmentVariables.All()...)
 	return nil
 }
 func (s *Runtime) SetRuntimeContext(ctx context.Context, req *runtimev0.InitRequest) error {
