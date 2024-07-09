@@ -1,4 +1,4 @@
-module github.com/codefly-dev/service-nextjs-auth0
+module github.com/codefly-dev/service-nextjs
 
 go 1.22.0
 
