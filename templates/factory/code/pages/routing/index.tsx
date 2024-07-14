@@ -3,13 +3,12 @@ import Layout from "../../components/layout";
 
 import { getEndpoints } from "codefly"
 import Endpoint from "./endpoint";
-import { ResponseDataProvider } from "./response.provider";
+import { ResponseDataProvider } from "../../providers/response.provider";
 import DataView from "./data-view";
 
 export const callApi = async (url) => {
   try {
-    var response;
-    response = await fetch(url);
+    const response = await fetch(url);
 
     if (!response.ok) {
       throw new Error('Network response was not ok');

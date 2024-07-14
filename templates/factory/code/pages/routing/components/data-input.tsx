@@ -1,6 +1,6 @@
 import { useState } from 'react';
-import { useResponseData } from '../response.provider';
-import { useCodeflyContext } from '../../providers/codefly.provider';
+import { useResponseData } from '../../../providers/response.provider';
+import { useCodeflyContext } from '../../../providers/codefly.provider';
 
 
 const DataInput = () => {

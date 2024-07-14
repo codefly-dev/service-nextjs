@@ -3,7 +3,7 @@ import { CopyBlock, dracula } from 'react-code-blocks';
 import { JSONView } from "../../components/json-view";
 
 import { useResponseData } from "./response.provider";
-import DataViewInitital from "./components/data-view-initial";
+import DataViewInitial from "./components/data-view-initial";
 import DataInput from './components/data-input';
 
 
@@ -14,7 +14,7 @@ const DataView = () => {
 
 
     if (!response && !loading && !route) {
-        return <DataViewInitital />
+        return <DataViewInitial />
     }
 
 

@@ -1,5 +1,5 @@
 import "../styles/globals.css";
-import { CodeflyContextProvider } from "./providers/codefly.provider";
+import { CodeflyContextProvider } from "../providers/codefly.provider";
 
 import { routing, getEndpoints } from "codefly"
 import  { AppContext } from 'next/app'
