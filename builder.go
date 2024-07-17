@@ -140,13 +140,7 @@ func (s *Builder) Build(ctx context.Context, req *builderv0.BuildRequest) (*buil
 	return s.Builder.BuildResponse()
 }
 
-type LoadBalancer struct {
-	Enabled bool
-	Host    string
-}
-
 type Parameters struct {
-	LoadBalancer
 }
 
 func (s *Builder) Deploy(ctx context.Context, req *builderv0.DeploymentRequest) (*builderv0.DeploymentResponse, error) {
@@ -184,16 +178,9 @@ func (s *Builder) Deploy(ctx context.Context, req *builderv0.DeploymentRequest) 
 	params := services.DeploymentParameters{
 		ConfigMap:  cm,
 		SecretMap:  secrets,
-		Parameters: Parameters{LoadBalancer{}},
+		Parameters: Parameters{},
 	}
 
-	if req.Deployment.LoadBalancer {
-		inst, err := resources.FindNetworkInstanceInNetworkMappings(ctx, req.NetworkMappings, s.HttpEndpoint, resources.NewPublicNetworkAccess())
-		if err != nil {
-			return s.Builder.DeployError(err)
-		}
-		params.Parameters = Parameters{LoadBalancer{Host: inst.Hostname, Enabled: true}}
-	}
 	var k *builderv0.KubernetesDeployment
 	if k, err = s.Builder.KubernetesDeploymentRequest(ctx, req); err != nil {
 		return s.Builder.DeployError(err)
@@ -234,7 +221,7 @@ func (s *Builder) Create(ctx context.Context, req *builderv0.CreateRequest) (*bu
 }
 
 func (s *Builder) CreateEndpoint(ctx context.Context) error {
-	endpoint := s.Base.Service.BaseEndpoint(standards.HTTP)
+	endpoint := s.Base.BaseEndpoint(standards.HTTP)
 	endpoint.Visibility = resources.VisibilityPublic
 	http, err := resources.LoadHTTPAPI(ctx)
 	if err != nil {
