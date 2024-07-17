@@ -148,7 +148,7 @@ func (s *Builder) Deploy(ctx context.Context, req *builderv0.DeploymentRequest) 
 
 	ctx = s.Wool.Inject(ctx)
 
-	s.Builder.LogDeployRequest(req, s.Wool.Focus)
+	s.Builder.LogDeployRequest(req, s.Wool.Debug)
 
 	err := s.EnvironmentVariables.AddEndpoints(ctx, req.DependenciesNetworkMappings, resources.NewPublicNetworkAccess())
 	if err != nil {
@@ -221,7 +221,7 @@ func (s *Builder) Create(ctx context.Context, req *builderv0.CreateRequest) (*bu
 }
 
 func (s *Builder) CreateEndpoint(ctx context.Context) error {
-	endpoint := s.Base.Service.BaseEndpoint(standards.HTTP)
+	endpoint := s.Base.BaseEndpoint(standards.HTTP)
 	endpoint.Visibility = resources.VisibilityPublic
 	http, err := resources.LoadHTTPAPI(ctx)
 	if err != nil {
