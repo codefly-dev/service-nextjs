@@ -31,7 +31,7 @@ const useCodeflyContext = () => {
         throw new Error('useCodeflyContext must be used within an CodeflyContextProvider');
     }
 
-    const routing = (method, endpoint, path) => {
+    const routing = (method: string, endpoint: string, path: string) => {
         return _routing[method](endpoint, path, [...context.data.endpoints])
     }
     

@@ -2,7 +2,7 @@ import { CopyBlock, dracula } from 'react-code-blocks';
 
 import { JSONView } from "../../components/json-view";
 
-import { useResponseData } from "./response.provider";
+import { useResponseData } from "../../providers/response.provider";
 import DataViewInitial from "./components/data-view-initial";
 import DataInput from './components/data-input';
 

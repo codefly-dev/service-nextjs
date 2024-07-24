@@ -1,26 +1,29 @@
 import Layout from "../../components/layout";
 
+import { getEndpoints, getEndpointsByModule} from "codefly";
 
-import { getEndpoints } from "codefly"
 import Endpoint from "./endpoint";
 import { ResponseDataProvider } from "../../providers/response.provider";
 import DataView from "./data-view";
 
-export const callApi = async (url) => {
+export const callApi = async (url: string | URL | Request) => {
   try {
     const response = await fetch(url);
 
     if (!response.ok) {
-      throw new Error('Network response was not ok');
+      console.error('Network response was not ok');
+      return { success: false, error: 'Network response was not ok' };
     }
-    return response.json();
+    const data = await response.json();
+    return { success: true, data };
   } catch (error) {
     console.error('Error calling the API', error);
-    throw error;
+    return { success: false, error: error instanceof Error ? error.message : 'An unknown error occurred' };
   }
 };
 
 const Routing = ({ serviceEndpoints }) => {
+  console.log("serviceEndpoints", serviceEndpoints)
   return (
     <Layout>
       <ResponseDataProvider>
@@ -44,7 +47,9 @@ const Routing = ({ serviceEndpoints }) => {
 
 export async function getServerSideProps() {
 
-  const serviceEndpoints = getEndpoints()
+  const serviceEndpoints = getEndpoints();
+  console.log("serviceEndpoints", serviceEndpoints)
+  // getEndpointsByModule() doesn't work
 
   return { props: { serviceEndpoints } };
 }
