@@ -23,7 +23,6 @@ export const callApi = async (url: string | URL | Request) => {
 };
 
 const Routing = ({ serviceEndpoints }) => {
-  console.log("serviceEndpoints", serviceEndpoints)
   return (
     <Layout>
       <ResponseDataProvider>
@@ -45,10 +44,20 @@ const Routing = ({ serviceEndpoints }) => {
   );
 };
 
+function customReplacer(key: string, value: any) {
+  if (key === 'routes' && Array.isArray(value)) {
+    return value.map(route => ({
+      path: route.path,
+      method: route.method,
+      visibility: route.visibility
+    }));
+  }
+  return value;
+}
 export async function getServerSideProps() {
 
   const serviceEndpoints = getEndpoints();
-  console.log("serviceEndpoints", serviceEndpoints)
+  console.log("serviceEndpoints", JSON.stringify(serviceEndpoints, customReplacer, 2));
   // getEndpointsByModule() doesn't work
 
   return { props: { serviceEndpoints } };
