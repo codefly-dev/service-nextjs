@@ -81,7 +81,6 @@ function customReplacer(key: string, value: any) {
 export async function getServerSideProps() {
 
   const serviceEndpoints = getEndpoints();
-  console.log("serviceEndpoints", JSON.stringify(serviceEndpoints, customReplacer, 2));
   // getEndpointsByModule() doesn't work
 
   return { props: { serviceEndpoints } };

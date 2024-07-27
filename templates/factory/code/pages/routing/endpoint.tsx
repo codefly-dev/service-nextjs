@@ -5,7 +5,7 @@ import { DoubleArrowRightIcon } from "@radix-ui/react-icons";
 import { useCodeflyContext } from "../../providers/codefly.provider";
 import { useResponseData } from "../../providers/response.provider";
 
-const getColorForMethod = (method) => {
+const getColorForMethod = (method: string) => {
     const colors = {
         'GET': 'green',
         'POST': 'yellow',
@@ -13,26 +13,23 @@ const getColorForMethod = (method) => {
         'PUT' : 'emerald',
         'DELETE' : 'red'
     };
-    
+
     // TODO : do this later
     return colors[method] ? `bg-${colors[method]}-500` : 'bg-green-500';
 }
 
 const Endpoint = ({ endpoint }) => {
+    console.log("HERE IN ENPOINT", endpoint)
     const { routing } = useCodeflyContext();
     const { setResponse, setEndpoint, setLoading, setRoute } = useResponseData();
 
-    const hanldeFetch = async (route, data) => {
+    const handleFetch = async (route, data) => {
         const { method, path } = route;
 
-        const url = routing(method, endpoint.service, path)
-
+        const url = routing(method, endpoint.module, endpoint.service, path)
+        console.log("URL", url)
+        setLoading(true);
         try {
-            if (!url) {
-                return;
-            }
-
-            setLoading(true);
             const response = await fetch(url, {
                 method: method,
                 headers: {
@@ -40,12 +37,28 @@ const Endpoint = ({ endpoint }) => {
                 },
                 body: method !== "GET" ? JSON.stringify(data) : null,
             });
-            const responseData = await response.json();
-            setResponse(responseData);
-            setLoading(false);
 
+            if (!response.ok) {
+                console.error('Network response was not ok');
+                setResponse({ success: false, error: 'Network response was not ok', statusCode: response.status });
+                setLoading(false);
+                return;
+            }
+
+            const contentType = response.headers.get('Content-Type');
+            let responseData;
+            if (contentType && contentType.includes('application/json')) {
+                responseData = await response.json();
+            } else {
+                responseData = await response.text();
+            }
+
+            setResponse({ success: true, data: responseData });
         } catch (error) {
-            console.error('Error posting data:', error);
+            console.error('Error fetching data:', error);
+            setResponse({ success: false, error: error instanceof Error ? error.message : 'An unknown error occurred' });
+        } finally {
+            setLoading(false);
         }
     };
 
@@ -55,7 +68,7 @@ const Endpoint = ({ endpoint }) => {
         setResponse(null)
         if (route.method === 'GET') {
 
-            hanldeFetch(route, null)
+            handleFetch(route, null)
         }
         setRoute(route);
 

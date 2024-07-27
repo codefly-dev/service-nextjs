@@ -33,7 +33,7 @@ const DataView = () => {
 
                 <div className='max-w-[900px] mb-10 mr-6 border p-1 rounded-md'>
                     <CopyBlock
-                        text={`\nconst { routing } = useCodeflyContext();\nconst url = routing("${route.method}", "${endpoint.service}", "${route.path}")\n\n`}
+                        text={`\nconst { routing } = useCodeflyContext();\nconst url = routing("${route.method}", "${endpoint.module}", "${endpoint.service}", "${route.path}")\n\n`}
                         language={"javascript"}
                         showLineNumbers={false}
                         theme={dracula}
