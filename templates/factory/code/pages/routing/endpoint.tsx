@@ -53,7 +53,7 @@ const Endpoint = ({ endpoint }) => {
                 responseData = await response.text();
             }
 
-            setResponse({ success: true, data: responseData });
+            setResponse(data: responseData);
         } catch (error) {
             console.error('Error fetching data:', error);
             setResponse({ success: false, error: error instanceof Error ? error.message : 'An unknown error occurred' });
