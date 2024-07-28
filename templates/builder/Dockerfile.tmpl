@@ -2,11 +2,13 @@ FROM {{.Builder}} AS builder
 
 WORKDIR /app
 
+RUN echo "Building the application"
+
 # Copy package.json and package-lock.json (or yarn.lock)
 COPY code/package.json  ./
 
 # Install dependencies
-RUN npm install sharp
+RUN npm i sharp
 
 # Copy the rest of the application code
 {{ range .Components}}
@@ -29,7 +31,7 @@ WORKDIR /app
 COPY --from=builder /app/package*.json ./
 
 # Install only production dependencies
-RUN npm install sharp --omit=dev
+RUN npm i --omit=dev
 
 # Set up a non-root user for better security
 RUN adduser -D appuser
@@ -40,7 +42,7 @@ COPY --chown=appuser --from=builder /app/.next ./.next
 COPY --chown=appuser --from=builder /app/service.codefly.yaml ./service.codefly.yaml
 
 # Environment variable to specify production mode
-ENV NODE_ENV production
+ENV NODE_ENV=production
 
 EXPOSE 3000
 
