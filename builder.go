@@ -148,7 +148,7 @@ func (s *Builder) Deploy(ctx context.Context, req *builderv0.DeploymentRequest) 
 
 	ctx = s.Wool.Inject(ctx)
 
-	s.Builder.LogDeployRequest(req, s.Wool.Focus)
+	s.Builder.LogDeployRequest(req, s.Wool.Debug)
 
 	err := s.EnvironmentVariables.AddEndpoints(ctx, req.DependenciesNetworkMappings, resources.NewPublicNetworkAccess())
 	if err != nil {
@@ -160,7 +160,7 @@ func (s *Builder) Deploy(ctx context.Context, req *builderv0.DeploymentRequest) 
 		return s.Builder.DeployError(err)
 	}
 
-	err = s.EnvironmentVariables.AddConfigurations(req.DependenciesConfigurations...)
+	err = s.EnvironmentVariables.AddConfigurations(ctx, req.DependenciesConfigurations...)
 	if err != nil {
 		return s.Builder.DeployError(err)
 	}

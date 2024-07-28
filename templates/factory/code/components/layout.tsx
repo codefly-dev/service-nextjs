@@ -17,7 +17,7 @@ const Layout = ({ loading = false, children }: LayoutProps) => {
   return (
     <>
       <Head>
-        <title>Next.js</title>
+        <title>codefly</title>
       </Head>
 
       <ThemeProvider>

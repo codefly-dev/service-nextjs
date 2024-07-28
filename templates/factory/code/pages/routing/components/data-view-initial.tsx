@@ -1,5 +1,5 @@
 
-const DataViewInitital = () => {
+const DataViewInitial = () => {
 
     return (
         <div className="w-3/4 pl-8 pt-0">
@@ -9,4 +9,4 @@ const DataViewInitital = () => {
 };
 
 
-export default DataViewInitital;
+export default DataViewInitial;
