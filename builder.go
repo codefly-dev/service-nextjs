@@ -125,7 +125,7 @@ func (s *Builder) Build(ctx context.Context, req *builderv0.BuildRequest) (*buil
 	builder, err := dockerhelpers.NewBuilder(dockerhelpers.BuilderConfiguration{
 		Root:        s.Location,
 		Dockerfile:  "builder/Dockerfile",
-		Ignores:     []string{"node_modules", ".next", ".idea", "env.local"},
+		Ignorefile:  "builder/dockerignore",
 		Destination: image,
 		Output:      s.Wool,
 	})
