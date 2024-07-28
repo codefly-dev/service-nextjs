@@ -12,10 +12,10 @@ const DataInput = () => {
     const { routing } = useCodeflyContext();
     const { setResponse, endpoint, setEndpoint, setLoading, route } = useResponseData();
 
-    const hanldeFetch = async (route, data) => {
+    const handleFetch = async (route, data) => {
         const { method, path } = route;
 
-        const url = routing(method, endpoint.service, path)
+        const url = routing(method, endpoint.module, endpoint.service, path)
 
         try {
             if (!url) {
@@ -49,7 +49,7 @@ const DataInput = () => {
             const parsedData = JSON.parse(jsonInput);
             setJsonData(parsedData);
             setError(null);
-            hanldeFetch(route, parsedData)
+            handleFetch(route, parsedData)
         } catch (err) {
             setError('Invalid JSON format');
         }

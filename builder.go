@@ -160,7 +160,7 @@ func (s *Builder) Deploy(ctx context.Context, req *builderv0.DeploymentRequest) 
 		return s.Builder.DeployError(err)
 	}
 
-	err = s.EnvironmentVariables.AddConfigurations(req.DependenciesConfigurations...)
+	err = s.EnvironmentVariables.AddConfigurations(ctx, req.DependenciesConfigurations...)
 	if err != nil {
 		return s.Builder.DeployError(err)
 	}

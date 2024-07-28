@@ -136,6 +136,8 @@ func (s *Runtime) Init(ctx context.Context, req *runtimev0.InitRequest) (*runtim
 
 	s.EnvironmentVariables.SetRuntimeContext(s.Runtime.RuntimeContext)
 
+	s.Configuration = req.Configuration
+
 	s.NetworkMappings = req.ProposedNetworkMappings
 
 	// Networking
@@ -194,7 +196,13 @@ func (s *Runtime) Start(ctx context.Context, req *runtimev0.StartRequest) (*runt
 
 	s.Runtime.LogStartRequest(req)
 
-	err := s.EnvironmentVariables.AddEndpoints(ctx, req.DependenciesNetworkMappings, resources.NewPublicNetworkAccess())
+	// TODO: Need to specify auth better
+	err := s.EnvironmentVariables.AddRawConfigurations(ctx, s.Configuration)
+	if err != nil {
+		return s.Runtime.StartErrorf(err, "adding raw configuration")
+	}
+
+	err = s.EnvironmentVariables.AddEndpoints(ctx, req.DependenciesNetworkMappings, resources.NewPublicNetworkAccess())
 	if err != nil {
 		return s.Runtime.StartErrorf(err, "adding external endpoints")
 	}
