@@ -202,17 +202,9 @@ func (s *Builder) Create(ctx context.Context, req *builderv0.CreateRequest) (*bu
 		return s.Builder.CreateError(err)
 	}
 
-	ignore := shared.NewIgnore("node_modules", ".next", ".idea", "env.local")
+	ignore := shared.NewIgnore("node_modules/", ".next/", ".idea/", "env.local")
 	err = s.Templates(ctx, s.Information, services.WithFactory(factoryFS).WithPathSelect(ignore))
 
-	if err != nil {
-		return s.Builder.CreateError(err)
-	}
-
-	// Need to handle the case of pages/_aps.tsx
-	err = templates.Copy(ctx, shared.Embed(specialFS),
-		"templates/factory/special/pages/app.tsx",
-		s.Local("code/pages/_app.tsx"))
 	if err != nil {
 		return s.Builder.CreateError(err)
 	}

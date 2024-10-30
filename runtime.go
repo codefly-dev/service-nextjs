@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"github.com/codefly-dev/core/agents/helpers/code"
 	"github.com/codefly-dev/core/builders"
+	"github.com/codefly-dev/core/configurations"
+	v0 "github.com/codefly-dev/core/generated/go/codefly/base/v0"
 	agentv0 "github.com/codefly-dev/core/generated/go/codefly/services/agent/v0"
 	runtimev0 "github.com/codefly-dev/core/generated/go/codefly/services/runtime/v0"
 	"github.com/codefly-dev/core/languages"
@@ -13,10 +15,15 @@ import (
 	"github.com/codefly-dev/core/shared"
 	"github.com/codefly-dev/core/templates"
 	"github.com/codefly-dev/core/wool"
+	nextjsauth0 "github.com/codefly-dev/service-nextjs/auth0"
 	"github.com/hashicorp/go-multierror"
+	"math/rand"
 	"os"
 	"path"
 )
+
+type AuthConfig interface {
+}
 
 type Runtime struct {
 	*Service
@@ -137,6 +144,7 @@ func (s *Runtime) Init(ctx context.Context, req *runtimev0.InitRequest) (*runtim
 	s.EnvironmentVariables.SetRuntimeContext(s.Runtime.RuntimeContext)
 
 	s.Configuration = req.Configuration
+	s.WorkspaceConfigurations = req.WorkspaceConfigurations
 
 	s.NetworkMappings = req.ProposedNetworkMappings
 
@@ -190,18 +198,67 @@ func (s *Runtime) DockerNodeModulesPath() string {
 	return s.Local(".cache/container/node_modules")
 }
 
+type AuthConfiguration struct {
+	Type string `yaml:"type"`
+}
+
+func (s *Runtime) ProcessAuth(ctx context.Context) error {
+	confs := append([]*v0.Configuration{s.Configuration}, s.WorkspaceConfigurations...)
+	for _, conf := range confs {
+		if conf == nil {
+			continue
+		}
+		auth, err := resources.GetConfigurationInformation(ctx, conf, "auth")
+		if err != nil {
+			continue
+		}
+		// Get the Type of the auth configuration
+		var c AuthConfiguration
+		err = configurations.InformationUnmarshal(auth, &c)
+		if err != nil {
+			return s.Wool.Wrapf(err, "cannot unmarshal auth configuration")
+		}
+		switch c.Type {
+		case "auth0":
+			err = nextjsauth0.HandleConfig(ctx, auth, s.EnvironmentVariables)
+			if err != nil {
+				return err
+			}
+		default:
+			return s.Wool.NewError("unknown auth type")
+		}
+	}
+	return nil
+}
+
+const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+
+func randomString(length int) string {
+	b := make([]byte, length)
+	for i := range b {
+		b[i] = charset[rand.Intn(len(charset))]
+	}
+	return string(b)
+}
+
 func (s *Runtime) Start(ctx context.Context, req *runtimev0.StartRequest) (*runtimev0.StartResponse, error) {
 	defer s.Wool.Catch()
 	ctx = s.Wool.Inject(ctx)
 
 	s.Runtime.LogStartRequest(req)
 
-	// TODO: Need to specify auth better
-	err := s.EnvironmentVariables.AddRawConfigurations(ctx, s.Configuration)
+	err := s.ProcessAuth(ctx)
 	if err != nil {
-		return s.Runtime.StartErrorf(err, "adding raw configuration")
+		return s.Runtime.StartError(err)
 	}
 
+	// Pass other information for next public
+	s.EnvironmentVariables.AddEnvironmentVariable(ctx, "NEXT_PUBLIC_CODEFLY__MODULE", s.Identity.Module)
+	s.EnvironmentVariables.AddEnvironmentVariable(ctx, "NEXT_PUBLIC_CODEFLY__SERVICE", s.Identity.Name)
+	s.EnvironmentVariables.AddEnvironmentVariable(ctx, "NEXT_PUBLIC_CODEFLY__SERVICE_VERSION", s.Identity.Version)
+
+	s.EnvironmentVariables.AddEnvironmentVariable(ctx, "NEXTAUTH_SECRET", randomString(12))
+	s.EnvironmentVariables.AddEnvironmentVariable(ctx, "NEXTAUTH_URL", fmt.Sprintf("http://localhost:%d", s.port))
 	err = s.EnvironmentVariables.AddEndpoints(ctx, req.DependenciesNetworkMappings, resources.NewPublicNetworkAccess())
 	if err != nil {
 		return s.Runtime.StartErrorf(err, "adding external endpoints")
