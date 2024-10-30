@@ -1,0 +1,20 @@
+import { getServerSession } from "next-auth/next"
+import { NextResponse } from "next/server"
+
+export async function POST(req: Request) {
+  const session = await getServerSession()
+
+  if (!session?.user) {
+    return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
+  }
+
+  const { name } = await req.json()
+
+  // Here, you would typically update the user's name in your database
+  // For this example, we'll just return a success response
+  
+  // Simulating a database update
+  console.log(`Updating name for user ${session.user.email} to ${name}`)
+
+  return NextResponse.json({ message: "Name updated successfully" })
+}

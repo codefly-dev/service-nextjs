@@ -1,0 +1,32 @@
+import { getServerSession } from "next-auth/next"
+import { redirect } from "next/navigation"
+import { BackButton } from "@/app/components/ui/BackButton"
+import { SettingsForm } from "./SettingsForm"
+
+const settingsStyles = {
+  container: "min-h-screen bg-gradient-to-b from-gray-50 to-gray-100 dark:from-gray-800 dark:to-gray-900 py-12 px-4 sm:px-6 lg:px-8",
+  content: "max-w-3xl mx-auto bg-white dark:bg-gray-800 shadow-lg rounded-2xl overflow-hidden",
+  header: "bg-gradient-to-r from-accent-yellow to-accent-yellow-light bg-opacity-20 dark:bg-opacity-10 px-6 py-6 flex justify-between items-center",
+  title: "text-3xl font-bold text-gray-900 dark:text-white",
+  backButton: "absolute top-4 left-4 text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white",
+} as const;
+
+export default async function SettingsPage() {
+  const session = await getServerSession()
+
+  if (!session?.user) {
+    redirect('/api/auth/signin')
+  }
+
+  return (
+    <div className={settingsStyles.container}>
+      <div className={settingsStyles.content}>
+        <div className={settingsStyles.header}>
+          <h1 className={settingsStyles.title}>Settings</h1>
+          <BackButton />
+        </div>
+        <SettingsForm user={session.user} />
+      </div>
+    </div>
+  )
+}
