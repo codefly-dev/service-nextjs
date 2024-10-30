@@ -1,0 +1,34 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --foreground-rgb: 0, 0, 0;
+  --background-start-rgb: 214, 219, 220;
+  --background-end-rgb: 255, 255, 255;
+  --accent-yellow: 250, 204, 21; /* Tailwind's yellow-400 */
+  --accent-yellow-light: 253, 224, 71; /* Tailwind's yellow-300 */
+}
+
+.dark {
+  --foreground-rgb: 255, 255, 255;
+  --background-start-rgb: 31, 41, 55; /* Gray-900 */
+  --background-end-rgb: 17, 24, 39; /* Gray-800 */
+}
+
+body {
+  color: rgb(var(--foreground-rgb));
+  background: rgb(var(--background-start-rgb));
+}
+
+.text-accent-yellow {
+  color: rgb(var(--accent-yellow));
+}
+
+.bg-accent-yellow {
+  background-color: rgb(var(--accent-yellow));
+}
+
+.hover\:bg-accent-yellow-light:hover {
+  background-color: rgb(var(--accent-yellow-light));
+}

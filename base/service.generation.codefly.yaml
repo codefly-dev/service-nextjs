@@ -1,9 +1,5 @@
-replacements:
-#  - from: Web
-#    to: "{{ .Service.Name.Title }}"
-#  - from: base_replacement
-#    to: "{{ .Service.Name.DNSCase }}"
 ignores:
   - service.generation.codefly.yaml
   - .next/
   - node_modules/
+skip-templatize: true

@@ -125,7 +125,6 @@ func testRun(t *testing.T, runtime *Runtime, ctx context.Context, identity *base
 	_, err = runtime.Start(ctx, &runtimev0.StartRequest{})
 	require.NoError(t, err)
 
-	client := http.Client{Timeout: 200 * time.Millisecond}
 	// Loop and wait for 1 seconds up to do a HTTP request to localhost with /version path
 	tries := 0
 	for {
@@ -135,9 +134,10 @@ func testRun(t *testing.T, runtime *Runtime, ctx context.Context, identity *base
 		time.Sleep(5 * time.Second)
 
 		// HTTP
+		client := http.Client{Timeout: time.Second}
 		response, err := client.Get(url)
-		// Check that we should have JSON Version: 0.0.0
 		if err != nil {
+			t.Log(err)
 			tries++
 			continue
 		}
@@ -150,8 +150,6 @@ func testRun(t *testing.T, runtime *Runtime, ctx context.Context, identity *base
 		var data map[string]interface{}
 		err = json.Unmarshal(body, &data)
 		require.NoError(t, err)
-
-		t.Log(data)
 
 		version, ok := data["version"].(string)
 		require.True(t, ok)
