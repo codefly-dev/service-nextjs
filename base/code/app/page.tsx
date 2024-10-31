@@ -39,10 +39,6 @@ export default function HomePage() {
                         View API Endpoints →
                     </Link>
                 </div>
-
-                <div className={styles.versionContainer}>
-                    <Version url={endpoint({service: 'server', path: '/version', method: 'GET'})} />
-                </div>
             </div>
         </div>
     );

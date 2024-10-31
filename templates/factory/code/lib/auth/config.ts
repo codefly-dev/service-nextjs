@@ -174,10 +174,21 @@ const auth0Config: NextAuthOptions = {
 export function getAuthConfig(
     authType: SupportedAuthType,
     override?: AuthOptionsOverride
-): NextAuthOptions | null {
-    // If no auth is required, return null
+): NextAuthOptions {
+    // For 'none' auth type, return a minimal config that effectively disables auth
     if (authType === 'none') {
-        return null;
+        return {
+            providers: [],
+            session: { strategy: "jwt" },
+            callbacks: {
+                async session({ session }) {
+                    return session;
+                },
+                async jwt({ token }) {
+                    return token;
+                }
+            }
+        };
     }
 
     // Auth0 specific configuration

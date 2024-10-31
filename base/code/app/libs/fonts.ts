@@ -1,12 +1,33 @@
-import { Inter as FontSans } from "next/font/google"
-import { JetBrains_Mono as FontMono } from "next/font/google"
+import { Inter } from 'next/font/google'
+import { Fira_Code } from 'next/font/google'
 
-export const fontSans = FontSans({
-    subsets: ["latin"],
-    variable: "--font-sans",
+export const fontSans = Inter({ 
+    subsets: ['latin'],
+    variable: '--font-sans',
+    display: 'swap',
+    preload: true,
+    fallback: [
+        '-apple-system',
+        'BlinkMacSystemFont',
+        'Segoe UI',
+        'Roboto',
+        'Helvetica Neue',
+        'sans-serif'
+    ]
 })
 
-export const fontMono = FontMono({
-    subsets: ["latin"],
-    variable: "--font-mono",
+export const fontMono = Fira_Code({
+    subsets: ['latin'],
+    variable: '--font-mono',
+    display: 'swap',
+    preload: true,
+    fallback: [
+        'SFMono-Regular',
+        'Menlo',
+        'Monaco',
+        'Consolas',
+        'Liberation Mono',
+        'Courier New',
+        'monospace'
+    ]
 })
