@@ -1,0 +1,21 @@
+/**
+ * Zustand store for UI-only state.
+ *
+ * RULES:
+ * - This store holds ONLY ephemeral UI state (sidebar open, selected items, etc.)
+ * - NEVER put server data here. Server state belongs in TanStack Query.
+ * - NEVER put URL state here. URL state belongs in nuqs.
+ * - NEVER put form state here. Form state belongs in react-hook-form.
+ */
+
+import { create } from "zustand";
+
+interface UIState {
+  sidebarOpen: boolean;
+  toggleSidebar: () => void;
+}
+
+export const useUIStore = create<UIState>((set) => ({
+  sidebarOpen: true,
+  toggleSidebar: () => set((state) => ({ sidebarOpen: !state.sidebarOpen })),
+}));

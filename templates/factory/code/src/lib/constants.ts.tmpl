@@ -1,0 +1,23 @@
+/**
+ * Application constants. Query keys, routes, and configuration.
+ *
+ * Query keys follow TanStack Query best practices:
+ * - Structured as arrays for automatic invalidation
+ * - Factory functions for parameterized keys
+ */
+
+export const queryKeys = {
+  // Example: replace with your domain
+  // items: {
+  //   all: ["items"] as const,
+  //   list: (filters: { search?: string; page?: number }) =>
+  //     ["items", "list", filters] as const,
+  //   detail: (id: string) => ["items", "detail", id] as const,
+  // },
+} as const;
+
+export const routes = {
+  home: "/",
+  login: "/login",
+  dashboard: "/dashboard",
+} as const;

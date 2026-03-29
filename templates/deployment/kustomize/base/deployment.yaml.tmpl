@@ -1,0 +1,37 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{.Name}}
+  namespace: {{.Namespace}}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: {{.Name}}
+  template:
+    metadata:
+      labels:
+        app: {{.Name}}
+    spec:
+      containers:
+        - name: nextjs
+          image: {{.Image}}
+          ports:
+            - containerPort: 3000
+          envFrom:
+            - configMapRef:
+                name: {{.Name}}-config
+            - secretRef:
+                name: {{.Name}}-secret
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 3000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 3000
+            initialDelaySeconds: 10
+            periodSeconds: 30
