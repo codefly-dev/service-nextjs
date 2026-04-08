@@ -14,7 +14,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "base_replacement",
+  title: "Codefly App",
   description: "Built with codefly and Next.js",
 };
 
