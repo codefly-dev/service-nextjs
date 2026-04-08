@@ -1,0 +1,13 @@
+replacements:
+  - from: base_replacement
+    to: "{{ .Service.Name.DNSCase }}"
+ignores:
+  - service.generation.codefly.yaml
+  - node_modules
+  - .next
+  - .git
+  - package-lock.json
+  - AGENTS.md
+  - CLAUDE.md
+  - README.md
+skip-templatize: true

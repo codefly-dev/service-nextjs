@@ -47,7 +47,7 @@ func (s *Builder) Load(ctx context.Context, req *builderv0.LoadRequest) (*builde
 		s.Wool.DisableCatch()
 	}
 
-	s.sourceLocation = s.Local(s.Settings.NodeSourceDir())
+	s.sourceLocation = s.Local("%s", s.Settings.NodeSourceDir())
 
 	requirements.Localize(s.Location)
 
@@ -314,7 +314,7 @@ func (s *Builder) Communicate(stream builderv0.Builder_CommunicateServer) error 
 	return nil
 }
 
-//go:embed templates/factory
+//go:embed all:templates/factory
 var factoryFS embed.FS
 
 //go:embed templates/builder

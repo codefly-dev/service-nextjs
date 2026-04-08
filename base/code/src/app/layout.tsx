@@ -14,7 +14,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "{{ .Service.Name.DNSCase }}",
+  title: "base_replacement",
   description: "Built with codefly and Next.js",
 };
 
