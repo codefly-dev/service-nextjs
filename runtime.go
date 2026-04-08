@@ -195,7 +195,7 @@ func (s *Runtime) WaitForReady(ctx context.Context, net *basev0.NetworkInstance)
 	defer s.Wool.Catch()
 	ctx = s.Wool.Inject(ctx)
 
-	address := fmt.Sprintf("http://%s:%d", net.Host, net.Port)
+	address := fmt.Sprintf("http://%s", net.Address)
 	s.Wool.Debug("waiting for Next.js to be ready", wool.Field("address", address))
 
 	maxRetry := 30
