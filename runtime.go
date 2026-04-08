@@ -65,6 +65,9 @@ func (s *Runtime) Load(ctx context.Context, req *runtimev0.LoadRequest) (*runtim
 		return s.Runtime.LoadErrorf(err, "finding http endpoint")
 	}
 
+	// Register agent commands
+	s.registerCommands()
+
 	return s.Runtime.LoadResponse()
 }
 
