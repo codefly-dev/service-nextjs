@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	basev0 "github.com/codefly-dev/core/generated/go/codefly/base/v0"
@@ -163,6 +164,20 @@ func (s *Runtime) Start(ctx context.Context, req *runtimev0.StartRequest) (*runt
 		return s.Runtime.StartError(err)
 	}
 
+	// Collect NEXT_PUBLIC_ env vars for browser-accessible dependency endpoints
+	var browserEnvs []*resources.EnvironmentVariable
+	for _, mapping := range req.DependenciesNetworkMappings {
+		ep := mapping.Endpoint
+		if ep.Api == "rest" || ep.Api == "http" {
+			instance := resources.FilterNetworkInstance(ctx, mapping.Instances, resources.NewNativeNetworkAccess())
+			if instance != nil {
+				envName := fmt.Sprintf("NEXT_PUBLIC_%s_%s", strings.ToUpper(ep.Service), strings.ToUpper(ep.Api))
+				s.Wool.Debug("injecting browser env", wool.Field("name", envName), wool.Field("address", instance.Address))
+				browserEnvs = append(browserEnvs, resources.Env(envName, instance.Address))
+			}
+		}
+	}
+
 	// Run npm run dev with the assigned port
 	proc, err := s.nativeEnv.NewProcess("npm", "run", "dev", "--", "-p", fmt.Sprintf("%d", net.Port))
 	if err != nil {
@@ -174,6 +189,8 @@ func (s *Runtime) Start(ctx context.Context, req *runtimev0.StartRequest) (*runt
 		return s.Runtime.StartErrorf(err, "getting environment variables")
 	}
 	proc.WithEnvironmentVariables(ctx, allEnvs...)
+	// Add NEXT_PUBLIC_ browser env vars
+	proc.WithEnvironmentVariables(ctx, browserEnvs...)
 	proc.WithOutput(s.Logger)
 
 	s.runner = proc
