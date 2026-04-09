@@ -32,6 +32,13 @@ func (s *Runtime) registerCommands() {
 		Description: "List all page routes in the Next.js app",
 		Tags:        []string{"info", "routing"},
 	}, s.cmdRoutes)
+
+	s.RegisterCommand(&agentv0.CommandDefinition{
+		Name:        "playwright",
+		Description: "Run Playwright end-to-end tests",
+		Usage:       `playwright {"target": "tests/e2e", "headed": false}`,
+		Tags:        []string{"testing", "e2e", "browser"},
+	}, s.cmdPlaywright)
 }
 
 func (s *Runtime) cmdScreenshot(ctx context.Context, args []string) (string, error) {
@@ -66,11 +73,13 @@ func (s *Runtime) cmdScreenshot(ctx context.Context, args []string) (string, err
 			console.log('Screenshot saved to %s');
 		})();`, addr, targetURL, outputPath, outputPath)
 
-	cmd := exec.CommandContext(ctx, "node", "-e", script)
-	cmd.Dir = s.sourceLocation
-	output, err := cmd.CombinedOutput()
+	proc, err := s.nativeEnv.NewProcess("node", "-e", script)
 	if err != nil {
-		return "", fmt.Errorf("screenshot failed: %w\n%s", err, string(output))
+		return "", fmt.Errorf("cannot create screenshot process: %w", err)
+	}
+	runErr := proc.Run(ctx)
+	if runErr != nil {
+		return "", fmt.Errorf("screenshot failed: %w", runErr)
 	}
 	return fmt.Sprintf("Screenshot saved to %s", outputPath), nil
 }
@@ -92,6 +101,7 @@ func (s *Runtime) cmdHealth(_ context.Context, _ []string) (string, error) {
 }
 
 func (s *Runtime) cmdRoutes(ctx context.Context, _ []string) (string, error) {
+	// Short-lived command — exec is fine for output capture
 	cmd := exec.CommandContext(ctx, "find", "src/app", "-name", "page.tsx", "-o", "-name", "page.ts")
 	cmd.Dir = s.sourceLocation
 	output, err := cmd.CombinedOutput()
@@ -110,6 +120,43 @@ func (s *Runtime) cmdRoutes(ctx context.Context, _ []string) (string, error) {
 		routes = append(routes, route)
 	}
 	return fmt.Sprintf("Routes (%d):\n%s", len(routes), strings.Join(routes, "\n")), nil
+}
+
+func (s *Runtime) cmdPlaywright(ctx context.Context, args []string) (string, error) {
+	if s.runner == nil {
+		return "", fmt.Errorf("frontend is not running — start it first")
+	}
+
+	addr, err := s.findHTTPAddress()
+	if err != nil {
+		return "", err
+	}
+
+	// Build npx playwright command
+	pwArgs := []string{"playwright", "test"}
+	headed := false
+	for _, arg := range args {
+		switch arg {
+		case "--headed":
+			headed = true
+		default:
+			pwArgs = append(pwArgs, arg)
+		}
+	}
+	if headed {
+		pwArgs = append(pwArgs, "--headed")
+	}
+
+	cmd := exec.CommandContext(ctx, "npx", pwArgs...)
+	cmd.Dir = s.sourceLocation
+	cmd.Env = append(cmd.Env, fmt.Sprintf("BASE_URL=%s", addr))
+	cmd.Env = append(cmd.Env, fmt.Sprintf("PLAYWRIGHT_BASE_URL=%s", addr))
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return string(output), fmt.Errorf("playwright tests failed: %w", err)
+	}
+	return string(output), nil
 }
 
 func (s *Runtime) findHTTPAddress() (string, error) {

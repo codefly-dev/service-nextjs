@@ -264,7 +264,62 @@ func (s *Runtime) Destroy(ctx context.Context, req *runtimev0.DestroyRequest) (*
 }
 
 func (s *Runtime) Test(ctx context.Context, req *runtimev0.TestRequest) (*runtimev0.TestResponse, error) {
-	return s.Runtime.TestResponse()
+	defer s.Wool.Catch()
+	ctx = s.Wool.Inject(ctx)
+
+	s.Wool.Info("running frontend tests")
+
+	// Build test command args
+	args := []string{"run", "test", "--", "--reporter=verbose"}
+	if req.Target != "" {
+		args = append(args, "--testNamePattern", req.Target)
+	}
+
+	// Use the native environment (same as runtime — inherits PATH, env vars)
+	testProc, err := s.nativeEnv.NewProcess("npm", args...)
+	if err != nil {
+		return s.Runtime.TestErrorf(err, "cannot create test process")
+	}
+
+	testEnvs, err := s.EnvironmentVariables.All()
+	if err != nil {
+		return s.Runtime.TestErrorf(err, "getting environment variables")
+	}
+	testProc.WithEnvironmentVariables(ctx, testEnvs...)
+	testProc.WithOutput(s.Logger)
+
+	runErr := testProc.Run(ctx)
+
+	// TODO: capture and parse vitest output for structured results
+	// For now, return basic pass/fail
+	if runErr != nil {
+		return s.Runtime.TestResponseWithResults(0, 0, 1, 0, 0, []string{runErr.Error()}, runErr)
+	}
+	return s.Runtime.TestResponseWithResults(1, 1, 0, 0, 0, nil, nil)
+}
+
+// parseVitestOutput extracts test counts from vitest output.
+func parseVitestOutput(output string) (run, passed, failed, skipped int32) {
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.Contains(line, "Tests") && (strings.Contains(line, "passed") || strings.Contains(line, "failed")) {
+			// Vitest format: "Tests  4 passed (4)"
+			parts := strings.Fields(line)
+			for i, part := range parts {
+				if part == "passed" && i > 0 {
+					fmt.Sscanf(parts[i-1], "%d", &passed)
+				}
+				if part == "failed" && i > 0 {
+					fmt.Sscanf(parts[i-1], "%d", &failed)
+				}
+				if part == "skipped" && i > 0 {
+					fmt.Sscanf(parts[i-1], "%d", &skipped)
+				}
+			}
+		}
+	}
+	run = passed + failed + skipped
+	return
 }
 
 /* Details */
