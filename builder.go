@@ -9,9 +9,11 @@ import (
 	dockerhelpers "github.com/codefly-dev/core/agents/helpers/docker"
 	"github.com/codefly-dev/core/agents/communicate"
 	"github.com/codefly-dev/core/agents/services"
+	proto "github.com/codefly-dev/core/companions/proto"
 	v0 "github.com/codefly-dev/core/generated/go/codefly/base/v0"
 	agentv0 "github.com/codefly-dev/core/generated/go/codefly/services/agent/v0"
 	builderv0 "github.com/codefly-dev/core/generated/go/codefly/services/builder/v0"
+	"github.com/codefly-dev/core/languages"
 	"github.com/codefly-dev/core/resources"
 	"github.com/codefly-dev/core/shared"
 	"github.com/codefly-dev/core/standards"
@@ -92,6 +94,32 @@ func (s *Builder) Update(ctx context.Context, req *builderv0.UpdateRequest) (*bu
 func (s *Builder) Sync(ctx context.Context, req *builderv0.SyncRequest) (*builderv0.SyncResponse, error) {
 	defer s.Wool.Catch()
 	ctx = s.Wool.Inject(ctx)
+
+	w := s.Wool
+
+	// Generate TypeScript Connect-ES client code from dependency gRPC endpoints.
+	// The proto companion runs buf with @bufbuild/protoc-gen-es and
+	// @connectrpc/protoc-gen-connect-es to produce typed TypeScript clients.
+	// The frontend uses Connect-web to call these services through the gateway.
+	for _, dep := range s.Service.Service.ServiceDependencies {
+		grpcEP, err := resources.FindGRPCEndpointFromService(ctx, dep, s.DependencyEndpoints)
+		if err != nil {
+			return s.Builder.SyncError(err)
+		}
+		if grpcEP == nil {
+			continue
+		}
+
+		destination := s.Local(s.Settings.NodeSourceDir(), "src", "gen")
+		w.Info("generating TypeScript Connect-ES client",
+			wool.Field("dependency", dep.Name),
+			wool.Field("destination", destination))
+
+		err = proto.GenerateGRPC(ctx, languages.TYPESCRIPT, destination, dep.Unique(), grpcEP)
+		if err != nil {
+			return s.Builder.SyncError(err)
+		}
+	}
 
 	return s.Builder.SyncResponse()
 }

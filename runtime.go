@@ -164,11 +164,15 @@ func (s *Runtime) Start(ctx context.Context, req *runtimev0.StartRequest) (*runt
 		return s.Runtime.StartError(err)
 	}
 
+	// Forward fixture env var so the FE can serve fixture data in dev mode
+	s.Wool.Debug("setting fixture", wool.Field("fixture", req.Fixture))
+	s.EnvironmentVariables.SetFixture(req.Fixture)
+
 	// Collect NEXT_PUBLIC_ env vars for browser-accessible dependency endpoints
 	var browserEnvs []*resources.EnvironmentVariable
 	for _, mapping := range req.DependenciesNetworkMappings {
 		ep := mapping.Endpoint
-		if ep.Api == "rest" || ep.Api == "http" {
+		if ep.Api == "rest" || ep.Api == "http" || ep.Api == "connect" {
 			instance := resources.FilterNetworkInstance(ctx, mapping.Instances, resources.NewNativeNetworkAccess())
 			if instance != nil {
 				envName := fmt.Sprintf("NEXT_PUBLIC_%s_%s", strings.ToUpper(ep.Service), strings.ToUpper(ep.Api))
@@ -215,7 +219,7 @@ func (s *Runtime) WaitForReady(ctx context.Context, net *basev0.NetworkInstance)
 	defer s.Wool.Catch()
 	ctx = s.Wool.Inject(ctx)
 
-	address := fmt.Sprintf("http://%s", net.Address)
+	address := net.Address
 	s.Wool.Debug("waiting for Next.js to be ready", wool.Field("address", address))
 
 	maxRetry := 30
