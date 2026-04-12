@@ -24,8 +24,9 @@ type Runtime struct {
 	*Service
 
 	// internal
-	nativeEnv *runners.NativeEnvironment
-	runner    runners.Proc
+	nativeEnv            *runners.NativeEnvironment
+	runner               runners.Proc
+	workspaceConfigs     []*basev0.Configuration
 }
 
 func NewRuntime() *Runtime {
@@ -98,6 +99,7 @@ func (s *Runtime) Init(ctx context.Context, req *runtimev0.InitRequest) (*runtim
 	}
 
 	// Workspace configurations (e.g. WorkOS API keys)
+	s.workspaceConfigs = req.WorkspaceConfigurations
 	err = s.EnvironmentVariables.AddConfigurations(ctx, req.WorkspaceConfigurations...)
 	if err != nil {
 		return s.Runtime.InitError(err)
@@ -178,6 +180,26 @@ func (s *Runtime) Start(ctx context.Context, req *runtimev0.StartRequest) (*runt
 				envName := fmt.Sprintf("NEXT_PUBLIC_%s_%s", strings.ToUpper(ep.Service), strings.ToUpper(ep.Api))
 				s.Wool.Debug("injecting browser env", wool.Field("name", envName), wool.Field("address", instance.Address))
 				browserEnvs = append(browserEnvs, resources.Env(envName, instance.Address))
+			}
+		}
+	}
+
+	// Map workspace configuration values to NEXT_PUBLIC_ browser env vars.
+	// E.g., workos config with CLIENT_ID → NEXT_PUBLIC_WORKOS_CLIENT_ID
+	for _, conf := range s.workspaceConfigs {
+		for _, info := range conf.Infos {
+			for _, val := range info.ConfigurationValues {
+				if val.Secret {
+					continue // Never expose secrets to the browser
+				}
+				// Only forward vars that start with the config name in uppercase
+				// e.g., WORKOS_CLIENT_ID from the "workos" config
+				prefix := strings.ToUpper(info.Name) + "_"
+				if strings.HasPrefix(val.Key, prefix) || val.Key == "AUTH_PROVIDER" {
+					envName := fmt.Sprintf("NEXT_PUBLIC_%s", val.Key)
+					s.Wool.Debug("injecting workspace browser env", wool.Field("name", envName))
+					browserEnvs = append(browserEnvs, resources.Env(envName, val.Value))
+				}
 			}
 		}
 	}
