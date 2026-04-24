@@ -20,6 +20,14 @@ import (
 // Agent version
 var agent = shared.Must(resources.LoadFromFs[resources.Agent](shared.Embed(infoFS)))
 
+// runtimeImage is the codefly-built Node runtime companion —
+// node:22.12.0-alpine3.21 + codefly CLI + the shared dev toolbox.
+// Built from core/companions/node/. Users CAN override via the nextjs
+// settings (DockerImage field) but it's NOT recommended; the companion
+// image is the mode-consistent default and gets rebuilt + pinned on
+// every codefly release.
+var runtimeImage = &resources.DockerImage{Name: "codeflydev/node", Tag: "0.0.11"}
+
 var requirements = builders.NewDependencies(agent.Name,
 	builders.NewDependency("service.codefly.yaml"),
 	builders.NewDependency("code").WithPathSelect(shared.NewSelect("*.ts", "*.tsx", "*.js", "*.jsx", "*.css")),
@@ -30,6 +38,13 @@ type Settings struct {
 	HotReload    bool   `yaml:"hot-reload"`
 	SourceDir    string `yaml:"source-dir"`    // Next.js source directory relative to service root. Default: "code"
 	AuthProvider string `yaml:"auth-provider"` // "none" (default), "workos"
+
+	// RuntimeImage overrides the codefly-built runtime image. Format:
+	// "name:tag". :latest and untagged refs are rejected — pinning is
+	// enforced. Leave empty to use codeflydev/node:<ver> (recommended).
+	// Field named RuntimeImage (not DockerImage) to avoid colliding with
+	// services.Base.DockerImage(req) which is the build-time image method.
+	RuntimeImage string `yaml:"docker-image"`
 }
 
 // NodeSourceDir returns the configured source directory, defaulting to "code".
@@ -84,6 +99,7 @@ func (s *Service) GetAgentInformation(ctx context.Context, _ *agentv0.AgentInfor
 		Capabilities: []*agentv0.Capability{
 			{Type: agentv0.Capability_BUILDER},
 			{Type: agentv0.Capability_RUNTIME},
+			{Type: agentv0.Capability_HOT_RELOAD},
 		},
 		Languages: []*agentv0.Language{
 			{Type: agentv0.Language_TYPESCRIPT},
@@ -104,9 +120,13 @@ func NewService() *Service {
 
 func main() {
 	svc := NewService()
+	code := NewCode(svc)
+	runtime := NewRuntime()
 	agents.Serve(agents.PluginRegistration{
 		Agent:   svc,
-		Runtime: NewRuntime(),
+		Code:    code,
+		Tooling: NewTooling(code, runtime),
+		Runtime: runtime,
 		Builder: NewBuilder(),
 	})
 }

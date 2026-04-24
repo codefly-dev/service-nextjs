@@ -1,0 +1,5 @@
+service-nextjs
+go.work
+go.work.sum
+*.test
+*.out

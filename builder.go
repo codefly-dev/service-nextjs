@@ -9,6 +9,8 @@ import (
 	dockerhelpers "github.com/codefly-dev/core/agents/helpers/docker"
 	"github.com/codefly-dev/core/agents/communicate"
 	"github.com/codefly-dev/core/agents/services"
+	"github.com/codefly-dev/core/agents/services/audit"
+	"github.com/codefly-dev/core/agents/services/upgrade"
 	proto "github.com/codefly-dev/core/companions/proto"
 	v0 "github.com/codefly-dev/core/generated/go/codefly/base/v0"
 	agentv0 "github.com/codefly-dev/core/generated/go/codefly/services/agent/v0"
@@ -110,7 +112,7 @@ func (s *Builder) Sync(ctx context.Context, req *builderv0.SyncRequest) (*builde
 			continue
 		}
 
-		destination := s.Local(s.Settings.NodeSourceDir(), "src", "gen")
+		destination := s.Local("%s/src/gen", s.Settings.NodeSourceDir())
 		w.Info("generating TypeScript Connect-ES client",
 			wool.Field("dependency", dep.Name),
 			wool.Field("destination", destination))
@@ -180,6 +182,37 @@ func (s *Builder) Build(ctx context.Context, req *builderv0.BuildRequest) (*buil
 	return s.Builder.BuildResponse()
 }
 
+// Audit scans the Next.js project for vulnerabilities (npm audit) and
+// optionally reports outdated packages (npm outdated). Runs at the node
+// source root (s.Settings.NodeSourceDir()).
+func (s *Builder) Audit(ctx context.Context, req *builderv0.AuditRequest) (*builderv0.AuditResponse, error) {
+	defer s.Wool.Catch()
+	ctx = s.Wool.Inject(ctx)
+	dir := s.Local("%s", s.Settings.NodeSourceDir())
+	res, err := audit.Node(ctx, dir, req.IncludeOutdated)
+	if err != nil {
+		return s.Builder.AuditError(err)
+	}
+	return s.Builder.AuditResponse(res.Findings, res.Outdated, res.Tool, res.Language)
+}
+
+// Upgrade bumps npm dependencies in package.json (npm update by default,
+// npm install <pkg>@latest for --major). --dry-run skips the write.
+func (s *Builder) Upgrade(ctx context.Context, req *builderv0.UpgradeRequest) (*builderv0.UpgradeResponse, error) {
+	defer s.Wool.Catch()
+	ctx = s.Wool.Inject(ctx)
+	dir := s.Local("%s", s.Settings.NodeSourceDir())
+	res, err := upgrade.Node(ctx, dir, upgrade.Options{
+		IncludeMajor: req.IncludeMajor,
+		DryRun:       req.DryRun,
+		Only:         req.Only,
+	})
+	if err != nil {
+		return s.Builder.UpgradeError(err)
+	}
+	return s.Builder.UpgradeResponse(res.Changes, res.LockfileDiff)
+}
+
 func (s *Builder) Deploy(ctx context.Context, req *builderv0.DeploymentRequest) (*builderv0.DeploymentResponse, error) {
 	defer s.Wool.Catch()
 	ctx = s.Wool.Inject(ctx)
@@ -239,6 +272,13 @@ func (s *Builder) Deploy(ctx context.Context, req *builderv0.DeploymentRequest) 
 }
 
 func (s *Builder) Options() []*agentv0.Question {
+	// Only present these questions during Create. Sync / Update / Build
+	// load settings from service.codefly.yaml — re-prompting there would
+	// block non-interactive CLI flows (codefly sync, CI, MCP) on an
+	// unanswerable question.
+	if s.Builder.CreationMode == nil {
+		return nil
+	}
 	return []*agentv0.Question{
 		communicate.NewSelection(
 			&agentv0.Message{Name: Mode, Message: "Deployment mode?", Description: "SSR runs a Node.js server (dynamic apps, auth, API routes). Static exports plain HTML/CSS/JS (corporate sites, docs)."},
@@ -303,7 +343,7 @@ func (s *Builder) Create(ctx context.Context, req *builderv0.CreateRequest) (*bu
 	// For static mode, override next.config.ts to use "export" output
 	if s.Settings.IsStatic() {
 		configContent := []byte("import type { NextConfig } from \"next\";\n\nconst nextConfig: NextConfig = {\n  output: \"export\",\n};\n\nexport default nextConfig;\n")
-		err = os.WriteFile(s.Local(s.Settings.NodeSourceDir(), "next.config.ts"), configContent, 0644)
+		err = os.WriteFile(s.Local("%s/next.config.ts", s.Settings.NodeSourceDir()), configContent, 0644)
 		if err != nil {
 			return s.Builder.CreateError(err)
 		}

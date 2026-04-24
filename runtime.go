@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -24,15 +25,93 @@ type Runtime struct {
 	*Service
 
 	// internal
-	nativeEnv            *runners.NativeEnvironment
-	runner               runners.Proc
-	workspaceConfigs     []*basev0.Configuration
+	runnerEnvironment runners.RunnerEnvironment
+	runner            runners.Proc
+	workspaceConfigs  []*basev0.Configuration
 }
 
 func NewRuntime() *Runtime {
 	return &Runtime{
 		Service: NewService(),
 	}
+}
+
+// SetRuntimeContext resolves the runtime context by checking available
+// toolchains, falling back to container mode when the preferred mode is
+// unavailable. Mirrors the go-grpc/python pattern so mode selection is
+// consistent across all three codefly-ecosystem runtimes.
+func (s *Runtime) SetRuntimeContext(_ context.Context, runtimeContext *basev0.RuntimeContext) error {
+	s.Runtime.RuntimeContext = setNextjsRuntimeContext(runtimeContext)
+	return nil
+}
+
+// setNextjsRuntimeContext picks native when npm is on PATH, nix when the
+// caller explicitly asked for it, container otherwise. Keeps the decision
+// local to this agent — the generic runner context helpers live in
+// core/runners/<lang> and there is no node-specific one yet.
+func setNextjsRuntimeContext(runtimeContext *basev0.RuntimeContext) *basev0.RuntimeContext {
+	if runtimeContext.Kind == resources.RuntimeContextNix {
+		return resources.NewRuntimeContextNix()
+	}
+	if runtimeContext.Kind == resources.RuntimeContextFree || runtimeContext.Kind == resources.RuntimeContextNative {
+		if _, err := exec.LookPath("npm"); err == nil {
+			return resources.NewRuntimeContextNative()
+		}
+	}
+	return resources.NewRuntimeContextContainer()
+}
+
+// CreateRunnerEnvironment dispatches by mode. Called from Init after the
+// network + config wiring is done so network mappings are available for
+// Docker port bindings.
+func (s *Runtime) CreateRunnerEnvironment(ctx context.Context) error {
+	// Resolve the runtime image: settings override takes priority, else
+	// use the codefly-built default. Override rejects :latest to keep
+	// builds reproducible.
+	image := runtimeImage
+	if override := s.Settings.RuntimeImage; override != "" {
+		parsed, perr := resources.ParsePinnedImage(override)
+		if perr != nil {
+			return s.Wool.Wrapf(perr, "invalid docker-image override in service.codefly.yaml")
+		}
+		s.Wool.Info("using docker-image override (not recommended)", wool.Field("image", parsed.FullName()))
+		image = parsed
+	}
+
+	switch {
+	case s.Runtime.IsContainerRuntime():
+		dockerEnv, err := runners.NewDockerEnvironment(ctx, image, s.sourceLocation, s.UniqueWithWorkspace())
+		if err != nil {
+			return s.Wool.Wrapf(err, "cannot create docker runner environment")
+		}
+		dockerEnv.WithPause()
+		// Bind the HTTP endpoint's container port to the host so the
+		// browser can reach `next dev` inside the container.
+		instance, err := resources.FindNetworkInstanceInNetworkMappings(ctx, s.NetworkMappings, s.HttpEndpoint, resources.NewNativeNetworkAccess())
+		if err == nil && instance != nil {
+			dockerEnv.WithPort(ctx, uint16(instance.Port))
+		}
+		s.runnerEnvironment = dockerEnv
+	case s.Runtime.IsNixRuntime():
+		nixEnv, err := runners.NewNixEnvironment(ctx, s.sourceLocation)
+		if err != nil {
+			return s.Wool.Wrapf(err, "cannot create nix runner environment")
+		}
+		s.runnerEnvironment = nixEnv
+	default:
+		nativeEnv, err := runners.NewNativeEnvironment(ctx, s.sourceLocation)
+		if err != nil {
+			return s.Wool.Wrapf(err, "cannot create native runner environment")
+		}
+		s.runnerEnvironment = nativeEnv
+	}
+
+	allEnvs, err := s.EnvironmentVariables.All()
+	if err != nil {
+		return s.Wool.Wrapf(err, "cannot get environment variables")
+	}
+	s.runnerEnvironment.WithEnvironmentVariables(ctx, allEnvs...)
+	return nil
 }
 
 func (s *Runtime) Load(ctx context.Context, req *runtimev0.LoadRequest) (*runtimev0.LoadResponse, error) {
@@ -112,14 +191,15 @@ func (s *Runtime) Init(ctx context.Context, req *runtimev0.InitRequest) (*runtim
 		return s.Runtime.InitError(err)
 	}
 
-	// Setup native runner
-	s.nativeEnv, err = runners.NewNativeEnvironment(ctx, s.sourceLocation)
-	if err != nil {
+	// Dispatch the runner environment by mode (native / docker / nix).
+	// Mirrors the pattern already used by go-grpc and python-fastapi so a
+	// plugin's mode is the single control point for where every spawn —
+	// dev server, tests, Playwright, screenshot, cmdRoutes — actually runs.
+	if err := s.CreateRunnerEnvironment(ctx); err != nil {
 		return s.Runtime.InitError(err)
 	}
 
-	err = s.nativeEnv.Init(ctx)
-	if err != nil {
+	if err := s.runnerEnvironment.Init(ctx); err != nil {
 		return s.Runtime.InitError(err)
 	}
 
@@ -205,7 +285,7 @@ func (s *Runtime) Start(ctx context.Context, req *runtimev0.StartRequest) (*runt
 	}
 
 	// Run npm run dev with the assigned port
-	proc, err := s.nativeEnv.NewProcess("npm", "run", "dev", "--", "-p", fmt.Sprintf("%d", net.Port))
+	proc, err := s.runnerEnvironment.NewProcess("npm", "run", "dev", "--", "-p", fmt.Sprintf("%d", net.Port))
 	if err != nil {
 		return s.Runtime.StartErrorf(err, "cannot create npm process")
 	}
@@ -217,6 +297,20 @@ func (s *Runtime) Start(ctx context.Context, req *runtimev0.StartRequest) (*runt
 	proc.WithEnvironmentVariables(ctx, allEnvs...)
 	// Add NEXT_PUBLIC_ browser env vars
 	proc.WithEnvironmentVariables(ctx, browserEnvs...)
+	// Cap process fan-out. Next.js dev mode otherwise spawns jest-worker
+	// pools for SWC transform + type-check, a webpack worker pool, and
+	// node's libuv threadpool — legitimate in prod, but under a multi-
+	// service dev stack this multiplies into hundreds of forks and has
+	// been observed driving macOS past kern.maxprocperuid during
+	// `codefly run` startup. NEXT_PRIVATE_WORKER=1 (previously set here)
+	// is not a real Next.js knob and does nothing — the real caps are
+	// UV_THREADPOOL_SIZE (libuv) and the experimental.cpus / workerThreads
+	// options baked into next.config.ts.
+	proc.WithEnvironmentVariables(ctx,
+		resources.Env("UV_THREADPOOL_SIZE", "2"),
+		resources.Env("NODE_OPTIONS", "--max-old-space-size=2048"),
+		resources.Env("NEXT_TELEMETRY_DISABLED", "1"),
+	)
 	proc.WithOutput(s.Logger)
 
 	s.runner = proc
@@ -302,7 +396,7 @@ func (s *Runtime) Test(ctx context.Context, req *runtimev0.TestRequest) (*runtim
 	}
 
 	// Use the native environment (same as runtime — inherits PATH, env vars)
-	testProc, err := s.nativeEnv.NewProcess("npm", args...)
+	testProc, err := s.runnerEnvironment.NewProcess("npm", args...)
 	if err != nil {
 		return s.Runtime.TestErrorf(err, "cannot create test process")
 	}

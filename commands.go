@@ -1,10 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"net/http"
-	"os/exec"
 	"strings"
 
 	agentv0 "github.com/codefly-dev/core/generated/go/codefly/services/agent/v0"
@@ -73,7 +73,7 @@ func (s *Runtime) cmdScreenshot(ctx context.Context, args []string) (string, err
 			console.log('Screenshot saved to %s');
 		})();`, addr, targetURL, outputPath, outputPath)
 
-	proc, err := s.nativeEnv.NewProcess("node", "-e", script)
+	proc, err := s.runnerEnvironment.NewProcess("node", "-e", script)
 	if err != nil {
 		return "", fmt.Errorf("cannot create screenshot process: %w", err)
 	}
@@ -101,14 +101,18 @@ func (s *Runtime) cmdHealth(_ context.Context, _ []string) (string, error) {
 }
 
 func (s *Runtime) cmdRoutes(ctx context.Context, _ []string) (string, error) {
-	// Short-lived command — exec is fine for output capture
-	cmd := exec.CommandContext(ctx, "find", "src/app", "-name", "page.tsx", "-o", "-name", "page.ts")
-	cmd.Dir = s.sourceLocation
-	output, err := cmd.CombinedOutput()
+	// Route `find` through the plugin's runner environment so a Docker-
+	// mode nextjs agent searches its own mounted tree rather than the host.
+	proc, err := s.runnerEnvironment.NewProcess("find", "src/app", "-name", "page.tsx", "-o", "-name", "page.ts")
 	if err != nil {
 		return "", fmt.Errorf("cannot list routes: %w", err)
 	}
-	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+	var buf bytes.Buffer
+	proc.WithOutput(&buf)
+	if runErr := proc.Run(ctx); runErr != nil {
+		return "", fmt.Errorf("cannot list routes: %w", runErr)
+	}
+	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
 	var routes []string
 	for _, line := range lines {
 		route := strings.TrimPrefix(line, "src/app")
@@ -147,16 +151,27 @@ func (s *Runtime) cmdPlaywright(ctx context.Context, args []string) (string, err
 		pwArgs = append(pwArgs, "--headed")
 	}
 
-	cmd := exec.CommandContext(ctx, "npx", pwArgs...)
-	cmd.Dir = s.sourceLocation
-	cmd.Env = append(cmd.Env, fmt.Sprintf("BASE_URL=%s", addr))
-	cmd.Env = append(cmd.Env, fmt.Sprintf("PLAYWRIGHT_BASE_URL=%s", addr))
-
-	output, err := cmd.CombinedOutput()
+	// Route through NativeProc so Playwright inherits Setpgid + pgid-file
+	// tracking. Raw exec.CommandContext here was the worst orphan source
+	// in this repo: Chromium/Webkit detach from the npx parent on purpose,
+	// and without a recorded pgroup they survived every form of CLI death,
+	// holding ports and hundreds of MB of RAM until a manual kill.
+	proc, err := s.runnerEnvironment.NewProcess("npx", pwArgs...)
 	if err != nil {
-		return string(output), fmt.Errorf("playwright tests failed: %w", err)
+		return "", fmt.Errorf("cannot create playwright process: %w", err)
 	}
-	return string(output), nil
+	var outBuf bytes.Buffer
+	proc.WithOutput(&outBuf)
+	proc.WithEnvironmentVariables(ctx,
+		&resources.EnvironmentVariable{Key: "BASE_URL", Value: addr},
+		&resources.EnvironmentVariable{Key: "PLAYWRIGHT_BASE_URL", Value: addr},
+	)
+	runErr := proc.Run(ctx)
+	output := outBuf.String()
+	if runErr != nil {
+		return output, fmt.Errorf("playwright tests failed: %w", runErr)
+	}
+	return output, nil
 }
 
 func (s *Runtime) findHTTPAddress() (string, error) {
@@ -165,5 +180,5 @@ func (s *Runtime) findHTTPAddress() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("cannot find HTTP address: %w", err)
 	}
-	return fmt.Sprintf("http://%s", net.Address), nil
+	return net.Address, nil
 }
