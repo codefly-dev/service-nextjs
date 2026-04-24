@@ -3,7 +3,7 @@ module github.com/codefly-dev/service-nextjs
 go 1.25.0
 
 require (
-	github.com/codefly-dev/core v0.1.155
+	github.com/codefly-dev/core v0.1.156
 	github.com/stretchr/testify v1.11.1
 	google.golang.org/grpc v1.80.0
 	gopkg.in/yaml.v3 v3.0.1
