@@ -387,15 +387,68 @@ func (s *Runtime) Test(ctx context.Context, req *runtimev0.TestRequest) (*runtim
 	defer s.Wool.Catch()
 	ctx = s.Wool.Inject(ctx)
 
-	s.Wool.Info("running frontend tests")
-
-	// Build test command args
-	args := []string{"run", "test", "--", "--reporter=verbose"}
-	if req.Target != "" {
-		args = append(args, "--testNamePattern", req.Target)
+	// Map suite → npm script. Default = "test" (vitest unit tests).
+	// "e2e" expects a "test:e2e" script wired to Playwright in package.json.
+	npmScript := "test"
+	switch req.Suite {
+	case "", "unit":
+		npmScript = "test"
+	case "e2e":
+		npmScript = "test:e2e"
+	case "integration":
+		npmScript = "test:integration"
+	case "smoke":
+		npmScript = "test:smoke"
+	default:
+		// Unknown suite → try a script of the same name and let npm
+		// surface a clearer error than we could.
+		npmScript = "test:" + req.Suite
 	}
 
-	// Use the native environment (same as runtime — inherits PATH, env vars)
+	// Args before `--` go to npm; args after go to the test runner.
+	args := []string{"run", npmScript, "--"}
+
+	if req.Verbose {
+		args = append(args, "--reporter=verbose")
+	} else {
+		args = append(args, "--reporter=default")
+	}
+
+	// Filter pattern. Vitest uses --testNamePattern (regex), Playwright
+	// uses --grep. We pass --testNamePattern by default; Playwright's
+	// CLI also accepts --grep, so for e2e we send that instead.
+	if pat := combineRegex(req.Filters); pat != "" {
+		switch req.Suite {
+		case "e2e":
+			args = append(args, "--grep", pat)
+		default:
+			args = append(args, "--testNamePattern", pat)
+		}
+	}
+
+	// Back-compat: target field still maps to a name pattern when
+	// filters are not supplied (older clients).
+	if req.Target != "" && len(req.Filters) == 0 {
+		switch req.Suite {
+		case "e2e":
+			args = append(args, "--grep", req.Target)
+		default:
+			args = append(args, "--testNamePattern", req.Target)
+		}
+	}
+
+	if req.Coverage {
+		args = append(args, "--coverage")
+	}
+
+	// Power-user passthrough.
+	args = append(args, req.ExtraArgs...)
+
+	s.Wool.Info("running frontend tests",
+		wool.Field("suite", req.Suite),
+		wool.Field("script", npmScript),
+		wool.Field("args", args))
+
 	testProc, err := s.runnerEnvironment.NewProcess("npm", args...)
 	if err != nil {
 		return s.Runtime.TestErrorf(err, "cannot create test process")
@@ -416,6 +469,20 @@ func (s *Runtime) Test(ctx context.Context, req *runtimev0.TestRequest) (*runtim
 		return s.Runtime.TestResponseWithResults(0, 0, 1, 0, 0, []string{runErr.Error()}, runErr)
 	}
 	return s.Runtime.TestResponseWithResults(1, 1, 0, 0, 0, nil, nil)
+}
+
+// combineRegex joins multiple filter patterns into a single OR-regex
+// suitable for vitest --testNamePattern, jest --testNamePattern, or
+// playwright --grep. Returns "" when no patterns are given so callers
+// can omit the flag entirely.
+func combineRegex(patterns []string) string {
+	if len(patterns) == 0 {
+		return ""
+	}
+	if len(patterns) == 1 {
+		return patterns[0]
+	}
+	return "(" + strings.Join(patterns, "|") + ")"
 }
 
 // parseVitestOutput extracts test counts from vitest output.
