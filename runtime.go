@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -17,6 +19,7 @@ import (
 	runtimev0 "github.com/codefly-dev/core/generated/go/codefly/services/runtime/v0"
 	"github.com/codefly-dev/core/resources"
 	runners "github.com/codefly-dev/core/runners/base"
+	"github.com/codefly-dev/core/runners/javascript"
 )
 
 type Runtime struct {
@@ -387,39 +390,59 @@ func (s *Runtime) Test(ctx context.Context, req *runtimev0.TestRequest) (*runtim
 	defer s.Wool.Catch()
 	ctx = s.Wool.Inject(ctx)
 
-	// Map suite → npm script. Default = "test" (vitest unit tests).
-	// "e2e" expects a "test:e2e" script wired to Playwright in package.json.
+	// Map suite → npm script + runner kind. Default = "test" (vitest
+	// unit tests). "e2e" expects a "test:e2e" script wired to
+	// Playwright in package.json.
 	npmScript := "test"
+	runnerKind := "vitest"
 	switch req.Suite {
 	case "", "unit":
 		npmScript = "test"
+		runnerKind = "vitest"
 	case "e2e":
 		npmScript = "test:e2e"
+		runnerKind = "playwright"
 	case "integration":
 		npmScript = "test:integration"
+		runnerKind = "vitest"
 	case "smoke":
 		npmScript = "test:smoke"
+		runnerKind = "vitest"
 	default:
-		// Unknown suite → try a script of the same name and let npm
-		// surface a clearer error than we could.
 		npmScript = "test:" + req.Suite
+		runnerKind = "vitest"
 	}
+
+	// Allocate a JSON output file under the project's .codefly cache.
+	// Both vitest and playwright support writing JSON to disk via a
+	// flag; capturing stdout would tangle with the runner's own
+	// progress prints + coverage summary.
+	cacheDir := filepath.Join(s.Service.sourceLocation, ".codefly", "test-output")
+	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+		return s.Runtime.TestErrorf(err, "creating test cache dir")
+	}
+	jsonFile := filepath.Join(cacheDir, fmt.Sprintf("test-%d.json", time.Now().UnixNano()))
+	defer os.Remove(jsonFile)
 
 	// Args before `--` go to npm; args after go to the test runner.
 	args := []string{"run", npmScript, "--"}
 
-	if req.Verbose {
-		args = append(args, "--reporter=verbose")
-	} else {
-		args = append(args, "--reporter=default")
+	// Reporter + output file. Playwright's flag is --output, not
+	// --outputFile (jest/vitest convention). We thread JSON to disk
+	// and parse from there.
+	args = append(args, "--reporter=json")
+	switch runnerKind {
+	case "playwright":
+		args = append(args, "--output="+jsonFile)
+	default:
+		args = append(args, "--outputFile="+jsonFile)
 	}
 
-	// Filter pattern. Vitest uses --testNamePattern (regex), Playwright
-	// uses --grep. We pass --testNamePattern by default; Playwright's
-	// CLI also accepts --grep, so for e2e we send that instead.
+	// Filter pattern. Vitest uses --testNamePattern (regex),
+	// Playwright uses --grep.
 	if pat := combineRegex(req.Filters); pat != "" {
-		switch req.Suite {
-		case "e2e":
+		switch runnerKind {
+		case "playwright":
 			args = append(args, "--grep", pat)
 		default:
 			args = append(args, "--testNamePattern", pat)
@@ -429,8 +452,8 @@ func (s *Runtime) Test(ctx context.Context, req *runtimev0.TestRequest) (*runtim
 	// Back-compat: target field still maps to a name pattern when
 	// filters are not supplied (older clients).
 	if req.Target != "" && len(req.Filters) == 0 {
-		switch req.Suite {
-		case "e2e":
+		switch runnerKind {
+		case "playwright":
 			args = append(args, "--grep", req.Target)
 		default:
 			args = append(args, "--testNamePattern", req.Target)
@@ -441,11 +464,11 @@ func (s *Runtime) Test(ctx context.Context, req *runtimev0.TestRequest) (*runtim
 		args = append(args, "--coverage")
 	}
 
-	// Power-user passthrough.
 	args = append(args, req.ExtraArgs...)
 
 	s.Wool.Info("running frontend tests",
 		wool.Field("suite", req.Suite),
+		wool.Field("runner", runnerKind),
 		wool.Field("script", npmScript),
 		wool.Field("args", args))
 
@@ -461,14 +484,30 @@ func (s *Runtime) Test(ctx context.Context, req *runtimev0.TestRequest) (*runtim
 	testProc.WithEnvironmentVariables(ctx, testEnvs...)
 	testProc.WithOutput(s.Logger)
 
+	started := time.Now()
 	runErr := testProc.Run(ctx)
+	duration := time.Since(started)
 
-	// TODO: capture and parse vitest output for structured results
-	// For now, return basic pass/fail
-	if runErr != nil {
-		return s.Runtime.TestResponseWithResults(0, 0, 1, 0, 0, []string{runErr.Error()}, runErr)
+	// Read + parse the JSON regardless of runErr. A failed test run
+	// produces non-zero exit code AND a complete JSON file; the
+	// structured response carries the per-case detail.
+	jsonBytes, _ := os.ReadFile(jsonFile) //nolint:gosec // path under sourceDir
+	var run *javascript.StructuredTestRun
+	switch runnerKind {
+	case "playwright":
+		run = javascript.ParsePlaywrightJSON(string(jsonBytes))
+	default:
+		run = javascript.ParseJestVitestJSON(string(jsonBytes), 0)
 	}
-	return s.Runtime.TestResponseWithResults(1, 1, 0, 0, 0, nil, nil)
+
+	if run == nil || (len(run.Suites) == 0 && runErr != nil) {
+		// Runner crashed before producing JSON — surface the raw
+		// error rather than an empty structured response.
+		return s.Runtime.TestErrorf(runErr, "test runner failed before producing JSON output")
+	}
+
+	s.Wool.Forwardf("Tests: %s", run.LegacyTestSummary().SummaryLine())
+	return run.ToProtoResponse(runnerKind, req.Suite, duration), runErr
 }
 
 // combineRegex joins multiple filter patterns into a single OR-regex
