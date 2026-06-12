@@ -13,25 +13,84 @@ spec:
       labels:
         app: {{.Name}}
     spec:
+      # node:22-alpine has user `node` at uid 1000. The codefly Next.js
+      # Dockerfile template runs the app under that user (output:
+      # standalone build copies files chown=node:node).
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
       containers:
         - name: nextjs
           image: {{.Image}}
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            runAsUser: 1000
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+            seccompProfile:
+              type: RuntimeDefault
           ports:
-            - containerPort: 3000
+            - name: http
+              containerPort: 3000
           envFrom:
             - configMapRef:
                 name: {{.Name}}-config
             - secretRef:
                 name: {{.Name}}-secret
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          # Next.js's "/" path is server-rendered and may hit upstream
+          # services — too heavy for liveness. Use /api/healthz (a
+          # Next.js route handler the user wires up to return 200);
+          # readiness can stay on / for backwards-compat but with
+          # tighter timeouts so a stuck SSR doesn't keep the pod in
+          # the Service while it heals.
+          startupProbe:
+            httpGet:
+              path: /api/healthz
+              port: http
+            periodSeconds: 2
+            failureThreshold: 30
           readinessProbe:
             httpGet:
-              path: /
-              port: 3000
+              path: /api/healthz
+              port: http
             initialDelaySeconds: 5
             periodSeconds: 10
+            timeoutSeconds: 3
           livenessProbe:
             httpGet:
-              path: /
-              port: 3000
+              path: /api/healthz
+              port: http
             initialDelaySeconds: 10
             periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          # Next.js writes its build cache + tracing to .next/ at
+          # runtime. With readOnlyRootFilesystem, those need writable
+          # mounts. /tmp is for general scratch.
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: next-cache
+              mountPath: /app/.next/cache
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: next-cache
+          emptyDir: {}

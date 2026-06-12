@@ -382,6 +382,29 @@ func (s *Runtime) Stop(ctx context.Context, req *runtimev0.StopRequest) (*runtim
 
 func (s *Runtime) Destroy(ctx context.Context, req *runtimev0.DestroyRequest) (*runtimev0.DestroyResponse, error) {
 	defer s.Wool.Catch()
+	ctx = s.Wool.Inject(ctx)
+
+	// Destroy was a no-op, so the runner environment was never torn down: in
+	// container mode it leaked a paused `sleep infinity` container, and a
+	// Destroy without a preceding Stop leaked the whole node process tree.
+	// Shutdown stops AND removes all resources.
+	if s.Watcher != nil {
+		s.Watcher.Pause()
+	}
+	if s.Events != nil {
+		close(s.Events)
+		s.Events = nil
+	}
+	if s.runner != nil {
+		_ = s.runner.Stop(ctx)
+		s.runner = nil
+	}
+	if s.runnerEnvironment != nil {
+		if err := s.runnerEnvironment.Shutdown(ctx); err != nil {
+			return s.Runtime.DestroyError(err)
+		}
+		s.runnerEnvironment = nil
+	}
 
 	return s.Runtime.DestroyResponse()
 }
