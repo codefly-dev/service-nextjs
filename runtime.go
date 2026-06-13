@@ -326,6 +326,11 @@ func (s *Runtime) Start(ctx context.Context, req *runtimev0.StartRequest) (*runt
 	// Wait for ready
 	err = s.WaitForReady(ctx, net)
 	if err != nil {
+		// The dev server was Started above; stop it before bailing so a
+		// readiness timeout doesn't leave an orphaned next.js process
+		// holding the port.
+		_ = s.runner.Stop(ctx)
+		s.runner = nil
 		return s.Runtime.StartError(err)
 	}
 

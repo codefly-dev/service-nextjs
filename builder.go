@@ -59,7 +59,7 @@ func (s *Builder) Load(ctx context.Context, req *builderv0.LoadRequest) (*builde
 		s.Builder.CreationMode = req.CreationMode
 		s.Builder.GettingStarted, err = templates.ApplyTemplateFrom(ctx, shared.Embed(factoryFS), "templates/factory/GETTING_STARTED.md", s.Information)
 		if err != nil {
-			return nil, err
+			return s.Builder.LoadError(err)
 		}
 		return s.Builder.LoadResponse()
 	}
@@ -351,7 +351,7 @@ func (s *Builder) Create(ctx context.Context, req *builderv0.CreateRequest) (*bu
 
 	err = s.CreateEndpoints(ctx)
 	if err != nil {
-		return nil, s.Wool.Wrapf(err, "cannot create endpoints")
+		return s.Builder.CreateError(s.Wool.Wrapf(err, "cannot create endpoints"))
 	}
 
 	return s.Builder.CreateResponse(ctx, s.Settings)
