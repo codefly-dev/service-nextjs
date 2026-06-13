@@ -21,12 +21,12 @@ import (
 var agent = shared.Must(resources.LoadFromFs[resources.Agent](shared.Embed(infoFS)))
 
 // runtimeImage is the codefly-built Node runtime companion —
-// node:22.12.0-alpine3.21 + codefly CLI + the shared dev toolbox.
+// node:24.16.0-alpine3.22 + codefly CLI + the shared dev toolbox.
 // Built from core/companions/node/. Users CAN override via the nextjs
 // settings (DockerImage field) but it's NOT recommended; the companion
 // image is the mode-consistent default and gets rebuilt + pinned on
 // every codefly release.
-var runtimeImage = &resources.DockerImage{Name: "codeflydev/node", Tag: "0.0.11"}
+var runtimeImage = &resources.DockerImage{Name: "codeflydev/node", Tag: "0.0.12"}
 
 var requirements = builders.NewDependencies(agent.Name,
 	builders.NewDependency("service.codefly.yaml"),

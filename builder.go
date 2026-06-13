@@ -131,7 +131,7 @@ type DockerTemplating struct {
 	Static      bool
 }
 
-const NodeVersion = "22"
+const NodeVersion = "24"
 
 func (s *Builder) Build(ctx context.Context, req *builderv0.BuildRequest) (*builderv0.BuildResponse, error) {
 	defer s.Wool.Catch()
