@@ -19,6 +19,7 @@ import (
 	runtimev0 "github.com/codefly-dev/core/generated/go/codefly/services/runtime/v0"
 	"github.com/codefly-dev/core/resources"
 	runners "github.com/codefly-dev/core/runners/base"
+	dockerrun "github.com/codefly-dev/core/runners/dockerrun"
 	"github.com/codefly-dev/core/runners/javascript"
 )
 
@@ -83,7 +84,7 @@ func (s *Runtime) CreateRunnerEnvironment(ctx context.Context) error {
 
 	switch {
 	case s.Runtime.IsContainerRuntime():
-		dockerEnv, err := runners.NewDockerEnvironment(ctx, image, s.sourceLocation, s.UniqueWithWorkspace())
+		dockerEnv, err := dockerrun.NewDockerEnvironment(ctx, image, s.sourceLocation, s.UniqueWithWorkspace())
 		if err != nil {
 			return s.Wool.Wrapf(err, "cannot create docker runner environment")
 		}
