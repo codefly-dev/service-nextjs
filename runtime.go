@@ -254,6 +254,9 @@ func (s *Runtime) Start(ctx context.Context, req *runtimev0.StartRequest) (*runt
 	s.Wool.Debug("setting fixture", wool.Field("fixture", req.Fixture))
 	s.EnvironmentVariables.SetFixture(req.Fixture)
 
+	// Add per-service runtime overrides (--set <service>:KEY=VAL)
+	s.EnvironmentVariables.AddOverrides(req.GetOverrides())
+
 	// Collect NEXT_PUBLIC_ env vars for browser-accessible dependency endpoints
 	var browserEnvs []*resources.EnvironmentVariable
 	for _, mapping := range req.DependenciesNetworkMappings {
