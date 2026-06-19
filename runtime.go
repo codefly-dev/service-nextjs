@@ -156,6 +156,19 @@ func (s *Runtime) Load(ctx context.Context, req *runtimev0.LoadRequest) (*runtim
 	return s.Runtime.LoadResponse()
 }
 
+// dropNilConfigs returns the configurations with any nil entries removed. The
+// runtime/init protos come from another process; a nil element must be skipped, not
+// dereferenced — an agent must never panic on the shape of its inputs.
+func dropNilConfigs(in []*basev0.Configuration) []*basev0.Configuration {
+	out := make([]*basev0.Configuration, 0, len(in))
+	for _, c := range in {
+		if c != nil {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
 func (s *Runtime) Init(ctx context.Context, req *runtimev0.InitRequest) (*runtimev0.InitResponse, error) {
 	defer s.Wool.Catch()
 	ctx = s.Wool.Inject(ctx)
@@ -176,20 +189,26 @@ func (s *Runtime) Init(ctx context.Context, req *runtimev0.InitRequest) (*runtim
 	if err != nil {
 		return s.Runtime.InitError(err)
 	}
+	// A (nil, no-error) mapping must fail gracefully, never be wrapped into a
+	// `[]{nil}` that derefs downstream (an agent must never panic).
+	if nm == nil {
+		return s.Runtime.InitError(fmt.Errorf("no network mapping resolved for the http endpoint"))
+	}
 	err = s.EnvironmentVariables.AddEndpoints(ctx, []*basev0.NetworkMapping{nm}, resources.NewNativeNetworkAccess())
 	if err != nil {
 		return s.Runtime.InitError(err)
 	}
 
-	// Workspace configurations (e.g. WorkOS API keys)
-	s.workspaceConfigs = req.WorkspaceConfigurations
-	err = s.EnvironmentVariables.AddConfigurations(ctx, req.WorkspaceConfigurations...)
+	// Workspace configurations (e.g. WorkOS API keys). Drop nil entries before the
+	// env-var assembly — a nil from upstream must never panic the agent.
+	s.workspaceConfigs = dropNilConfigs(req.WorkspaceConfigurations)
+	err = s.EnvironmentVariables.AddConfigurations(ctx, s.workspaceConfigs...)
 	if err != nil {
 		return s.Runtime.InitError(err)
 	}
 
-	// Dependencies configurations
-	confs := resources.FilterConfigurations(req.DependenciesConfigurations, resources.NewRuntimeContextNative())
+	// Dependencies configurations (from saas/api & friends) — same nil discipline.
+	confs := resources.FilterConfigurations(dropNilConfigs(req.DependenciesConfigurations), resources.NewRuntimeContextNative())
 	err = s.EnvironmentVariables.AddConfigurations(ctx, confs...)
 	if err != nil {
 		return s.Runtime.InitError(err)
@@ -260,6 +279,11 @@ func (s *Runtime) Start(ctx context.Context, req *runtimev0.StartRequest) (*runt
 	// Collect NEXT_PUBLIC_ env vars for browser-accessible dependency endpoints
 	var browserEnvs []*resources.EnvironmentVariable
 	for _, mapping := range req.DependenciesNetworkMappings {
+		// Never trust the shape of a proto we didn't build: a nil mapping or a
+		// mapping with no endpoint must SKIP, never deref (an agent must never panic).
+		if mapping == nil || mapping.Endpoint == nil {
+			continue
+		}
 		ep := mapping.Endpoint
 		if ep.Api == "rest" || ep.Api == "http" || ep.Api == "connect" {
 			instance := resources.FilterNetworkInstance(ctx, mapping.Instances, resources.NewNativeNetworkAccess())
@@ -274,8 +298,17 @@ func (s *Runtime) Start(ctx context.Context, req *runtimev0.StartRequest) (*runt
 	// Map workspace configuration values to NEXT_PUBLIC_ browser env vars.
 	// E.g., workos config with CLIENT_ID → NEXT_PUBLIC_WORKOS_CLIENT_ID
 	for _, conf := range s.workspaceConfigs {
+		if conf == nil {
+			continue
+		}
 		for _, info := range conf.Infos {
+			if info == nil {
+				continue
+			}
 			for _, val := range info.ConfigurationValues {
+				if val == nil {
+					continue
+				}
 				if val.Secret {
 					continue // Never expose secrets to the browser
 				}
