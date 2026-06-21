@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -24,6 +25,19 @@ func TestNextjsLifecycle_Matrix(t *testing.T) {
 		t.Fatalf("mkdtemp: %v", err)
 	}
 	defer os.RemoveAll(dir)
+
+	// Provision the nix devShell (nodejs) into the work dir so the nix backend
+	// has a flake to materialize — mirrors what the runtime does via
+	// ensureNixFlake. Without it the nix subtest has no flake and fails.
+	for _, f := range []string{"flake.nix", "flake.lock"} {
+		data, rerr := os.ReadFile(filepath.Join("nix", f))
+		if rerr != nil {
+			t.Fatalf("read nix/%s: %v", f, rerr)
+		}
+		if werr := os.WriteFile(filepath.Join(dir, f), data, 0o644); werr != nil {
+			t.Fatalf("write %s: %v", f, werr)
+		}
+	}
 
 	img := &resources.DockerImage{Name: "node", Tag: "22-alpine"}
 

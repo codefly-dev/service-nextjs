@@ -97,6 +97,11 @@ func (s *Runtime) CreateRunnerEnvironment(ctx context.Context) error {
 		}
 		s.runnerEnvironment = dockerEnv
 	case s.Runtime.IsNixRuntime():
+		// Provision the devShell (nodejs) when the project doesn't ship a
+		// flake.nix, so NewNixEnvironment has something to materialize.
+		if err := ensureNixFlake(s.sourceLocation); err != nil {
+			return s.Wool.Wrapf(err, "cannot provision nix flake")
+		}
 		nixEnv, err := runners.NewNixEnvironment(ctx, s.sourceLocation)
 		if err != nil {
 			return s.Wool.Wrapf(err, "cannot create nix runner environment")
