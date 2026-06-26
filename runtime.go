@@ -49,18 +49,31 @@ func (s *Runtime) SetRuntimeContext(_ context.Context, runtimeContext *basev0.Ru
 	return nil
 }
 
-// setNextjsRuntimeContext picks native when npm is on PATH, nix when the
-// caller explicitly asked for it, container otherwise. Keeps the decision
-// local to this agent — the generic runner context helpers live in
-// core/runners/<lang> and there is no node-specific one yet.
+// setNextjsRuntimeContext resolves the runtime mode. An explicit Nix or
+// Container request is honored as-is. Otherwise (Native / Free / nil — the
+// AUTO case) it picks the best available environment: run LOCAL if it can,
+// then NIX, then DOCKER. Local wins when the npm toolchain is on PATH; nix
+// when the nix CLI is available; container is the universal fallback.
+//
+// A nil argument is treated as AUTO so a missing SetRuntimeContext call never
+// panics here — an agent must never panic on host input.
 func setNextjsRuntimeContext(runtimeContext *basev0.RuntimeContext) *basev0.RuntimeContext {
-	if runtimeContext.Kind == resources.RuntimeContextNix {
-		return resources.NewRuntimeContextNix()
+	kind := resources.RuntimeContextFree
+	if runtimeContext != nil {
+		kind = runtimeContext.Kind
 	}
-	if runtimeContext.Kind == resources.RuntimeContextFree || runtimeContext.Kind == resources.RuntimeContextNative {
-		if _, err := exec.LookPath("npm"); err == nil {
-			return resources.NewRuntimeContextNative()
-		}
+	switch kind {
+	case resources.RuntimeContextNix:
+		return resources.NewRuntimeContextNix()
+	case resources.RuntimeContextContainer:
+		return resources.NewRuntimeContextContainer()
+	}
+	// AUTO: local → nix → docker.
+	if _, err := exec.LookPath("npm"); err == nil {
+		return resources.NewRuntimeContextNative()
+	}
+	if _, err := exec.LookPath("nix"); err == nil {
+		return resources.NewRuntimeContextNix()
 	}
 	return resources.NewRuntimeContextContainer()
 }
@@ -69,6 +82,16 @@ func setNextjsRuntimeContext(runtimeContext *basev0.RuntimeContext) *basev0.Runt
 // network + config wiring is done so network mappings are available for
 // Docker port bindings.
 func (s *Runtime) CreateRunnerEnvironment(ctx context.Context) error {
+	// AUTO fallback: if the host never delivered a runtime context (no
+	// SetRuntimeContext call), resolve one now — local → nix → docker — rather
+	// than letting the mode dispatch below nil-dereference. An agent must never
+	// panic on missing host input.
+	if s.Runtime.RuntimeContext == nil {
+		s.Runtime.RuntimeContext = setNextjsRuntimeContext(nil)
+		s.Wool.Info("no runtime context provided — auto-resolved",
+			wool.Field("mode", s.Runtime.RuntimeContext.Kind))
+	}
+
 	// Resolve the runtime image: settings override takes priority, else
 	// use the codefly-built default. Override rejects :latest to keep
 	// builds reproducible.
