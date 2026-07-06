@@ -93,8 +93,14 @@ func (s *Service) GetAgentInformation(ctx context.Context, _ *agentv0.AgentInfor
 	}
 
 	return &agentv0.AgentInformation{
+		// NPM is the native runtime; NIX (implemented in nixflake.go via
+		// RuntimeContextNix) lets the CLI's per-service Docker-free gate
+		// (flow.resolveDockerFallback → Runner.SupportsNix) fall back to a
+		// nix-provisioned node toolchain when Docker is unreachable. Without
+		// the NIX entry the run hard-stops with "requires Docker".
 		RuntimeRequirements: []*agentv0.Runtime{
 			{Type: agentv0.Runtime_NPM},
+			{Type: agentv0.Runtime_NIX},
 		},
 		Capabilities: []*agentv0.Capability{
 			{Type: agentv0.Capability_BUILDER},
