@@ -439,13 +439,10 @@ func (s *Runtime) Stop(ctx context.Context, req *runtimev0.StopRequest) (*runtim
 		}
 	}
 
-	if s.Watcher != nil {
-		s.Watcher.Pause()
-	}
-	if s.Events != nil {
-		close(s.Events)
-		s.Events = nil
-	}
+	// Cancel the watcher and let its Start goroutine's deferred close of Events
+	// run exactly once — Stop/Destroy must not close Events itself, or it races
+	// that goroutine into a "close of closed channel" panic.
+	s.Base.StopWatcher()
 
 	return s.Runtime.StopResponse()
 }
@@ -458,13 +455,10 @@ func (s *Runtime) Destroy(ctx context.Context, req *runtimev0.DestroyRequest) (*
 	// container mode it leaked a paused `sleep infinity` container, and a
 	// Destroy without a preceding Stop leaked the whole node process tree.
 	// Shutdown stops AND removes all resources.
-	if s.Watcher != nil {
-		s.Watcher.Pause()
-	}
-	if s.Events != nil {
-		close(s.Events)
-		s.Events = nil
-	}
+	// Cancel the watcher and let its Start goroutine's deferred close of Events
+	// run exactly once — Stop/Destroy must not close Events itself, or it races
+	// that goroutine into a "close of closed channel" panic.
+	s.Base.StopWatcher()
 	if s.runner != nil {
 		_ = s.runner.Stop(ctx)
 		s.runner = nil
