@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"os"
 
-	dockerhelpers "github.com/codefly-dev/core/agents/helpers/docker"
 	"github.com/codefly-dev/core/agents/communicate"
+	dockerhelpers "github.com/codefly-dev/core/agents/helpers/docker"
 	"github.com/codefly-dev/core/agents/services"
 	"github.com/codefly-dev/core/agents/services/audit"
 	"github.com/codefly-dev/core/agents/services/upgrade"
@@ -217,58 +217,15 @@ func (s *Builder) Deploy(ctx context.Context, req *builderv0.DeploymentRequest) 
 	defer s.Wool.Catch()
 	ctx = s.Wool.Inject(ctx)
 
-	s.Builder.LogDeployRequest(req, s.Wool.Debug)
-
-	s.EnvironmentVariables.SetRunning()
-
-	var k *builderv0.KubernetesDeployment
-	var err error
-	if k, err = s.Builder.KubernetesDeploymentRequest(ctx, req); err != nil {
-		return s.Builder.DeployError(err)
-	}
-
-	err = s.EnvironmentVariables.AddEndpoints(ctx,
-		resources.LocalizeNetworkMapping(req.NetworkMappings, "localhost"),
-		resources.NewContainerNetworkAccess())
-	if err != nil {
-		return s.Builder.DeployError(err)
-	}
-
-	err = s.EnvironmentVariables.AddEndpoints(ctx, req.DependenciesNetworkMappings,
-		resources.NewContainerNetworkAccess())
-	if err != nil {
-		return s.Builder.DeployError(err)
-	}
-
-	err = s.EnvironmentVariables.AddConfigurations(ctx, req.DependenciesConfigurations...)
-	if err != nil {
-		return s.Builder.DeployError(err)
-	}
-
-	confs, err := s.EnvironmentVariables.Configurations()
-	if err != nil {
-		return s.Builder.DeployError(err)
-	}
-	cm, err := services.EnvsAsConfigMapData(confs...)
-	if err != nil {
-		return s.Builder.DeployError(err)
-	}
-
-	secrets, err := services.EnvsAsSecretData(s.EnvironmentVariables.Secrets()...)
-	if err != nil {
-		return s.Builder.DeployError(err)
-	}
-
-	params := services.DeploymentParameters{
-		ConfigMap: cm,
-		SecretMap: secrets,
-	}
-
-	err = s.Builder.KustomizeDeploy(ctx, req.Environment, k, deploymentFS, params)
-	if err != nil {
-		return s.Builder.DeployError(err)
-	}
-	return s.Builder.DeployResponse()
+	return s.Builder.DeployKustomize(ctx, req, services.KustomizeDeployment{
+		EnvironmentVariables: s.EnvironmentVariables,
+		Templates:            deploymentFS,
+		Inputs: services.DeploymentInputs{
+			OwnEndpoints:             true,
+			DependencyEndpoints:      true,
+			DependencyConfigurations: true,
+		},
+	})
 }
 
 func (s *Builder) Options() []*agentv0.Question {
