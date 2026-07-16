@@ -1,19 +1,23 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	basev0 "github.com/codefly-dev/core/generated/go/codefly/base/v0"
 
 	"github.com/codefly-dev/core/agents/helpers/code"
 	"github.com/codefly-dev/core/agents/services"
+	"github.com/codefly-dev/core/llmout"
 	"github.com/codefly-dev/core/wool"
 
 	runtimev0 "github.com/codefly-dev/core/generated/go/codefly/services/runtime/v0"
@@ -32,6 +36,7 @@ type Runtime struct {
 	runnerEnvironment runners.RunnerEnvironment
 	runner            runners.Proc
 	workspaceConfigs  []*basev0.Configuration
+	dependenciesMu    sync.Mutex
 }
 
 func NewRuntime() *Runtime {
@@ -251,6 +256,12 @@ func (s *Runtime) Init(ctx context.Context, req *runtimev0.InitRequest) (*runtim
 	}
 
 	if err := s.runnerEnvironment.Init(ctx); err != nil {
+		return s.Runtime.InitError(err)
+	}
+
+	// Dependency installation is an agent concern. A fresh CI checkout and a
+	// newly generated service must not need provider-specific `npm ci` steps.
+	if err := s.ensureNodeDependencies(ctx); err != nil {
 		return s.Runtime.InitError(err)
 	}
 
@@ -569,7 +580,8 @@ func (s *Runtime) Test(ctx context.Context, req *runtimev0.TestRequest) (*runtim
 		return s.Runtime.TestErrorf(err, "getting environment variables")
 	}
 	testProc.WithEnvironmentVariables(ctx, testEnvs...)
-	testProc.WithOutput(s.Logger)
+	var consoleOutput bytes.Buffer
+	testProc.WithOutput(io.MultiWriter(s.Logger, &consoleOutput))
 
 	started := time.Now()
 	runErr := testProc.Run(ctx)
@@ -579,6 +591,23 @@ func (s *Runtime) Test(ctx context.Context, req *runtimev0.TestRequest) (*runtim
 	// produces non-zero exit code AND a complete JSON file; the
 	// structured response carries the per-case detail.
 	jsonBytes, _ := os.ReadFile(jsonFile) //nolint:gosec // path under sourceDir
+	if len(bytes.TrimSpace(jsonBytes)) == 0 {
+		run, passed, failed, skipped := parseNPMTestOutput(consoleOutput.String())
+		if run == 0 {
+			if runErr == nil {
+				runErr = fmt.Errorf("test script completed without machine-readable or parseable results")
+			}
+			return s.Runtime.TestErrorf(runErr, "test runner produced no results")
+		}
+		failures := []string(nil)
+		if runErr != nil {
+			failures = append(failures, runErr.Error())
+		}
+		resp, responseErr := s.Runtime.TestResponseWithResults(run, passed, failed, skipped, 0, failures, runErr)
+		resp.Output = "composite npm test script: aggregate counts parsed from console output; per-case JSON was unavailable"
+		s.Wool.Forwardf("Tests: %d passed, %d failed, %d skipped", passed, failed, skipped)
+		return resp, responseErr
+	}
 	var run *javascript.StructuredTestRun
 	switch runnerKind {
 	case "playwright":
@@ -595,6 +624,97 @@ func (s *Runtime) Test(ctx context.Context, req *runtimev0.TestRequest) (*runtim
 
 	s.Wool.Forwardf("Tests: %s", run.LegacyTestSummary().SummaryLine())
 	return run.ToProtoResponse(runnerKind, req.Suite, duration), runErr
+}
+
+// Lint owns the JavaScript/TypeScript static-lint phase for every service made
+// from this generic Next.js agent. CI only dispatches this RPC; it never needs
+// to know that the current implementation uses an npm script.
+func (s *Runtime) Lint(ctx context.Context, req *runtimev0.LintRequest) (*runtimev0.LintResponse, error) {
+	defer s.Wool.Catch()
+	ctx = s.Wool.Inject(ctx)
+	if req == nil {
+		req = &runtimev0.LintRequest{}
+	}
+	args := []string{"run", "lint"}
+	if req.Target != "" || req.Fix {
+		args = append(args, "--")
+		if req.Target != "" {
+			args = append(args, req.Target)
+		}
+		if req.Fix {
+			args = append(args, "--fix")
+		}
+	}
+	output, err := s.runNPM(ctx, args...)
+	compressed := llmout.Compress("npm", args, output)
+	if err != nil {
+		return s.Runtime.LintErrorf(err, "lint failed:\n%s", compressed)
+	}
+	return s.Runtime.LintResponse(compressed)
+}
+
+// Build is the native compile/typecheck phase. It is deliberately separate
+// from Builder.Build, which owns the deployable image.
+func (s *Runtime) Build(ctx context.Context, _ *runtimev0.BuildRequest) (*runtimev0.BuildResponse, error) {
+	defer s.Wool.Catch()
+	ctx = s.Wool.Inject(ctx)
+
+	var outputs []string
+	for _, args := range [][]string{{"run", "typecheck"}, {"run", "build"}} {
+		output, err := s.runNPM(ctx, args...)
+		compressed := llmout.Compress("npm", args, output)
+		outputs = append(outputs, compressed)
+		if err != nil {
+			return s.Runtime.BuildErrorf(err, "native build failed during npm %s:\n%s", strings.Join(args, " "), compressed)
+		}
+	}
+	return s.Runtime.BuildResponse(strings.Join(outputs, "\n"))
+}
+
+func (s *Runtime) ensureNodeDependencies(ctx context.Context) error {
+	s.dependenciesMu.Lock()
+	defer s.dependenciesMu.Unlock()
+	if s.runnerEnvironment == nil {
+		return fmt.Errorf("runner environment is not initialized")
+	}
+	if info, err := os.Stat(filepath.Join(s.sourceLocation, "node_modules")); err == nil && info.IsDir() {
+		return nil
+	}
+	args := []string{"install"}
+	if _, err := os.Stat(filepath.Join(s.sourceLocation, "package-lock.json")); err == nil {
+		args = []string{"ci"}
+	}
+	s.Wool.Info("installing frontend dependencies", wool.Field("command", "npm "+strings.Join(args, " ")))
+	proc, err := s.runnerEnvironment.NewProcess("npm", args...)
+	if err != nil {
+		return fmt.Errorf("create npm dependency process: %w", err)
+	}
+	proc.WithOutput(s.Logger)
+	if err := proc.Run(ctx); err != nil {
+		return fmt.Errorf("npm %s failed: %w", strings.Join(args, " "), err)
+	}
+	return nil
+}
+
+func (s *Runtime) runNPM(ctx context.Context, args ...string) (string, error) {
+	if s.runnerEnvironment == nil {
+		return "", fmt.Errorf("runner environment is not initialized")
+	}
+	proc, err := s.runnerEnvironment.NewProcess("npm", args...)
+	if err != nil {
+		return "", fmt.Errorf("create npm process: %w", err)
+	}
+	var output bytes.Buffer
+	// Return one bounded payload through the RPC. Streaming the same command to
+	// the agent logger would make the CLI print every diagnostic twice.
+	proc.WithOutput(&output)
+	envs, err := s.EnvironmentVariables.All()
+	if err != nil {
+		return "", fmt.Errorf("get environment variables: %w", err)
+	}
+	proc.WithEnvironmentVariables(ctx, envs...)
+	err = proc.Run(ctx)
+	return output.String(), err
 }
 
 // combineRegex joins multiple filter patterns into a single OR-regex
@@ -633,6 +753,33 @@ func parseVitestOutput(output string) (run, passed, failed, skipped int32) {
 	}
 	run = passed + failed + skipped
 	return
+}
+
+// parseNPMTestOutput combines the Vitest aggregate with Node's built-in test
+// runner summary. This is the truthful compatibility path for a consumer that
+// composes multiple commands in its npm test script: npm forwards Codefly's
+// JSON flags only to the final command, so a single per-case JSON envelope is
+// unavailable even though every command completed.
+func parseNPMTestOutput(output string) (run, passed, failed, skipped int32) {
+	run, passed, failed, skipped = parseVitestOutput(output)
+	var nodeRun, nodePassed, nodeFailed, nodeSkipped int32
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+		for _, item := range []struct {
+			prefix string
+			value  *int32
+		}{
+			{"ℹ tests ", &nodeRun},
+			{"ℹ pass ", &nodePassed},
+			{"ℹ fail ", &nodeFailed},
+			{"ℹ skipped ", &nodeSkipped},
+		} {
+			if strings.HasPrefix(line, item.prefix) {
+				_, _ = fmt.Sscanf(strings.TrimPrefix(line, item.prefix), "%d", item.value)
+			}
+		}
+	}
+	return run + nodeRun, passed + nodePassed, failed + nodeFailed, skipped + nodeSkipped
 }
 
 /* Details */

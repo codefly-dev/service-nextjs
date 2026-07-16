@@ -1,12 +1,17 @@
 # Welcome to the Next.js Frontend Service
 
-This service provides a modern Next.js 15 frontend application with:
+This service provides a modern Next.js 16 frontend application with:
 
 - **App Router** — file-based routing with layouts and server components
 - **TypeScript** — full type safety
 - **Tailwind CSS v4** — utility-first CSS with the latest engine
 - **Server Components** — React Server Components by default
 - **Hot-reload** — instant feedback during development via codefly watcher
+- **Application workspaces** — explicit packages below `code/packages/*`
+
+The agent owns the Next.js substrate only. Application plugin contracts and
+composition remain application-owned; no package is discovered or registered
+by side effect.
 
 ## Development
 

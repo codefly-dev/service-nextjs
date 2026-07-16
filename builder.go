@@ -1,15 +1,21 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"embed"
 	"fmt"
+	"io/fs"
 	"os"
+	"path/filepath"
+	"sort"
+	"strings"
 
 	"github.com/codefly-dev/core/agents/communicate"
 	dockerhelpers "github.com/codefly-dev/core/agents/helpers/docker"
 	"github.com/codefly-dev/core/agents/services"
 	"github.com/codefly-dev/core/agents/services/audit"
+	"github.com/codefly-dev/core/agents/services/sbom"
 	"github.com/codefly-dev/core/agents/services/upgrade"
 	proto "github.com/codefly-dev/core/companions/proto"
 	v0 "github.com/codefly-dev/core/generated/go/codefly/base/v0"
@@ -19,62 +25,65 @@ import (
 	"github.com/codefly-dev/core/resources"
 	"github.com/codefly-dev/core/shared"
 	"github.com/codefly-dev/core/standards"
-	"github.com/codefly-dev/core/templates"
 	"github.com/codefly-dev/core/wool"
+	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
 type Builder struct {
-	services.BuilderServer
+	*services.DefaultBuilder
 	*Service
 
 	answers map[string]*agentv0.Answer
+
+	relativeToWorkspace string
 }
 
 func NewBuilder() *Builder {
+	service := NewService()
 	return &Builder{
-		Service: NewService(),
+		DefaultBuilder: services.NewDefaultBuilder(service.Builder),
+		Service:        service,
 	}
 }
 
 func (s *Builder) Load(ctx context.Context, req *builderv0.LoadRequest) (*builderv0.LoadResponse, error) {
 	defer s.Wool.Catch()
-	ctx = s.Wool.Inject(ctx)
-
-	err := s.Base.Load(ctx, req.Identity, s.Settings)
-	if err != nil {
-		return nil, err
-	}
-
-	s.Wool.Debug("base loaded", wool.Field("identity", s.Identity))
-
-	if req.DisableCatch {
-		s.Wool.DisableCatch()
-	}
-
+	response, err := s.Builder.LoadService(ctx, req, services.BuilderLoad{
+		Settings:         s.Settings,
+		Requirements:     requirements,
+		FactoryTemplates: factoryFS,
+		ResolveEndpoints: func(ctx context.Context, endpoints []*v0.Endpoint) error {
+			endpoint, resolveErr := resources.FindHTTPEndpoint(ctx, endpoints)
+			if resolveErr != nil {
+				return resolveErr
+			}
+			s.HttpEndpoint = endpoint
+			return nil
+		},
+	})
 	s.sourceLocation = s.Local("%s", s.Settings.NodeSourceDir())
-
-	requirements.Localize(s.Location)
-
-	if req.CreationMode != nil {
-		s.Builder.CreationMode = req.CreationMode
-		s.Builder.GettingStarted, err = templates.ApplyTemplateFrom(ctx, shared.Embed(factoryFS), "templates/factory/GETTING_STARTED.md", s.Information)
-		if err != nil {
-			return s.Builder.LoadError(err)
-		}
-		return s.Builder.LoadResponse()
+	if req.GetIdentity() != nil {
+		s.relativeToWorkspace = serviceWorkspaceRelative(
+			req.GetIdentity().GetWorkspacePath(),
+			s.Location,
+			req.GetIdentity().GetRelativeToWorkspace(),
+		)
 	}
+	return response, err
+}
 
-	s.Endpoints, err = s.Base.Service.LoadEndpoints(ctx)
-	if err != nil {
-		return s.Builder.LoadError(err)
+func serviceWorkspaceRelative(workspaceRoot, serviceRoot, fallback string) string {
+	if physicalWorkspace, err := filepath.EvalSymlinks(workspaceRoot); err == nil {
+		workspaceRoot = physicalWorkspace
 	}
-
-	s.HttpEndpoint, err = resources.FindHTTPEndpoint(ctx, s.Endpoints)
-	if err != nil {
-		return s.Builder.LoadError(err)
+	if physicalService, err := filepath.EvalSymlinks(serviceRoot); err == nil {
+		serviceRoot = physicalService
 	}
-
-	return s.Builder.LoadResponse()
+	relative, err := filepath.Rel(workspaceRoot, serviceRoot)
+	if err == nil && relative != "." && !filepath.IsAbs(relative) && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return filepath.ToSlash(relative)
+	}
+	return filepath.ToSlash(filepath.Clean(fallback))
 }
 
 func (s *Builder) Init(ctx context.Context, req *builderv0.InitRequest) (*builderv0.InitResponse, error) {
@@ -87,17 +96,24 @@ func (s *Builder) Init(ctx context.Context, req *builderv0.InitRequest) (*builde
 	return s.Builder.InitResponse()
 }
 
-func (s *Builder) Update(ctx context.Context, req *builderv0.UpdateRequest) (*builderv0.UpdateResponse, error) {
-	defer s.Wool.Catch()
-
-	return &builderv0.UpdateResponse{}, nil
-}
-
 func (s *Builder) Sync(ctx context.Context, req *builderv0.SyncRequest) (*builderv0.SyncResponse, error) {
 	defer s.Wool.Catch()
 	ctx = s.Wool.Inject(ctx)
 
 	w := s.Wool
+
+	destination := s.Local("%s/src/gen", s.Settings.NodeSourceDir())
+	generateDestination := destination
+	var temporary string
+	if syncDryRun(req) {
+		var err error
+		temporary, err = os.MkdirTemp("", "codefly-nextjs-sync-*")
+		if err != nil {
+			return s.Builder.SyncError(err)
+		}
+		defer os.RemoveAll(temporary)
+		generateDestination = filepath.Join(temporary, "gen")
+	}
 
 	// Generate TypeScript Connect-ES client code from dependency gRPC endpoints.
 	// The proto companion runs buf with @bufbuild/protoc-gen-es and
@@ -112,26 +128,136 @@ func (s *Builder) Sync(ctx context.Context, req *builderv0.SyncRequest) (*builde
 			continue
 		}
 
-		destination := s.Local("%s/src/gen", s.Settings.NodeSourceDir())
 		w.Info("generating TypeScript Connect-ES client",
 			wool.Field("dependency", dep.Name),
-			wool.Field("destination", destination))
+			wool.Field("destination", generateDestination))
 
-		err = proto.GenerateGRPC(ctx, languages.TYPESCRIPT, destination, dep.Unique(), grpcEP)
+		err = proto.GenerateGRPC(ctx, languages.TYPESCRIPT, generateDestination, dep.Unique(), grpcEP)
 		if err != nil {
 			return s.Builder.SyncError(err)
 		}
 	}
 
-	return s.Builder.SyncResponse()
+	response, err := s.Builder.SyncResponse()
+	if err != nil || !syncDryRun(req) {
+		return response, err
+	}
+	prefix := filepath.Join(s.relativeToWorkspace, s.Settings.NodeSourceDir(), "src", "gen")
+	changed, err := changedGeneratedFiles(destination, generateDestination, prefix)
+	if err != nil {
+		return s.Builder.SyncError(err)
+	}
+	if err := setSyncChangedFiles(response, changed); err != nil {
+		return s.Builder.SyncError(err)
+	}
+	return response, nil
+}
+
+func syncDryRun(request *builderv0.SyncRequest) bool {
+	if request == nil {
+		return false
+	}
+	message := request.ProtoReflect()
+	field := message.Descriptor().Fields().ByName("dry_run")
+	return field != nil && message.Get(field).Bool()
+}
+
+func setSyncChangedFiles(response *builderv0.SyncResponse, changed []string) error {
+	message := response.ProtoReflect()
+	field := message.Descriptor().Fields().ByName("changed_files")
+	if field == nil || !field.IsList() {
+		if len(changed) == 0 {
+			return nil
+		}
+		return fmt.Errorf("sync response contract does not expose changed_files")
+	}
+	list := message.Mutable(field).List()
+	for _, path := range changed {
+		list.Append(protoreflect.ValueOfString(path))
+	}
+	return nil
+}
+
+type generatedFile struct {
+	kind string
+	data []byte
+}
+
+func changedGeneratedFiles(actualRoot, expectedRoot, workspacePrefix string) ([]string, error) {
+	actual, err := generatedFiles(actualRoot)
+	if err != nil {
+		return nil, err
+	}
+	expected, err := generatedFiles(expectedRoot)
+	if err != nil {
+		return nil, err
+	}
+	paths := map[string]bool{}
+	for path := range actual {
+		paths[path] = true
+	}
+	for path := range expected {
+		paths[path] = true
+	}
+	var changed []string
+	for path := range paths {
+		left, leftOK := actual[path]
+		right, rightOK := expected[path]
+		if leftOK && rightOK && left.kind == right.kind && bytes.Equal(left.data, right.data) {
+			continue
+		}
+		changed = append(changed, filepath.ToSlash(filepath.Join(workspacePrefix, path)))
+	}
+	sort.Strings(changed)
+	return changed, nil
+}
+
+func generatedFiles(root string) (map[string]generatedFile, error) {
+	files := map[string]generatedFile{}
+	if _, err := os.Lstat(root); err != nil {
+		if os.IsNotExist(err) {
+			return files, nil
+		}
+		return nil, err
+	}
+	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if path == root || entry.IsDir() {
+			return nil
+		}
+		relative, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			target, err := os.Readlink(path)
+			if err != nil {
+				return err
+			}
+			files[filepath.ToSlash(relative)] = generatedFile{kind: "symlink", data: []byte(target)}
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		files[filepath.ToSlash(relative)] = generatedFile{kind: "file", data: data}
+		return nil
+	})
+	return files, err
 }
 
 type DockerTemplating struct {
-	NodeVersion string
-	Static      bool
+	NodeImage string
+	Static    bool
 }
 
-const NodeVersion = "24"
+// NodeImage matches the tested SaaS Starter frontend build substrate. Keeping
+// the digest here makes agent-generated builds reproducible instead of silently
+// changing whenever a floating node:24-alpine tag moves.
+const NodeImage = "node:24.17.0-alpine3.23@sha256:7c70d1235c0b4c2bc9eeed5393d19f1bbdde6885ba0d58ba62bb385d7b0f3ff1"
 
 func (s *Builder) Build(ctx context.Context, req *builderv0.BuildRequest) (*builderv0.BuildResponse, error) {
 	defer s.Wool.Catch()
@@ -150,8 +276,8 @@ func (s *Builder) Build(ctx context.Context, req *builderv0.BuildRequest) (*buil
 	}
 
 	docker := DockerTemplating{
-		NodeVersion: NodeVersion,
-		Static:      s.Settings.IsStatic(),
+		NodeImage: NodeImage,
+		Static:    s.Settings.IsStatic(),
 	}
 
 	err = shared.DeleteFile(ctx, s.Local("builder/Dockerfile"))
@@ -193,7 +319,20 @@ func (s *Builder) Audit(ctx context.Context, req *builderv0.AuditRequest) (*buil
 	if err != nil {
 		return s.Builder.AuditError(err)
 	}
-	return s.Builder.AuditResponse(res.Findings, res.Outdated, res.Tool, res.Language)
+	return s.Builder.AuditResponse(req, res.Findings, res.Outdated, res.Tool, res.Language)
+}
+
+// SBOM inventories package-lock.json without installing packages or running
+// lifecycle scripts. The lockfile, not ambient node_modules, is authoritative.
+func (s *Builder) SBOM(ctx context.Context, req *builderv0.SBOMRequest) (*builderv0.SBOMResponse, error) {
+	defer s.Wool.Catch()
+	ctx = s.Wool.Inject(ctx)
+	dir := s.Local("%s", s.Settings.NodeSourceDir())
+	result, err := sbom.Node(ctx, dir, req.GetIncludeDevDependencies())
+	if err != nil {
+		return s.Builder.SBOMError(err)
+	}
+	return s.Builder.SBOMResponse(result.Bom, result.Tool, result.Language, result.SHA256)
 }
 
 // Upgrade bumps npm dependencies in package.json (npm update by default,
@@ -237,12 +376,12 @@ func (s *Builder) Options() []*agentv0.Question {
 		return nil
 	}
 	return []*agentv0.Question{
-		communicate.NewSelection(
+		communicate.NewChoice(
 			&agentv0.Message{Name: Mode, Message: "Deployment mode?", Description: "SSR runs a Node.js server (dynamic apps, auth, API routes). Static exports plain HTML/CSS/JS (corporate sites, docs)."},
 			&agentv0.Message{Name: "ssr", Message: "SSR (Server-Side Rendering)", Description: "Node.js server with server components, API routes, middleware"},
 			&agentv0.Message{Name: "static", Message: "Static Export", Description: "Plain HTML/CSS/JS served from CDN or nginx"},
 		),
-		communicate.NewSelection(
+		communicate.NewChoice(
 			&agentv0.Message{Name: AuthProviderOption, Message: "Auth provider?", Description: "Choose an authentication provider. WorkOS provides hosted login UI, SSO, and user management via AuthKit."},
 			&agentv0.Message{Name: "none", Message: "None (placeholder)", Description: "Scaffold placeholder auth — replace later with your provider of choice"},
 			&agentv0.Message{Name: "workos", Message: "WorkOS AuthKit", Description: "Production-ready auth with SSO, social login, and hosted UI via WorkOS"},
@@ -261,23 +400,23 @@ func (s *Builder) Create(ctx context.Context, req *builderv0.CreateRequest) (*bu
 	ctx = s.Wool.Inject(ctx)
 
 	if s.Builder.CreationMode != nil && s.Builder.CreationMode.Communicate && s.answers != nil {
-		selection, err := communicate.Selection(s.answers, Mode)
+		selection, err := communicate.Choice(s.answers, Mode)
 		if err != nil {
 			return s.Builder.CreateError(err)
 		}
-		if selection != nil && len(selection.Selected) > 0 {
-			s.Settings.Mode = selection.Selected[0]
+		if selection != nil && selection.Option != "" {
+			s.Settings.Mode = selection.Option
 		}
 		s.Settings.HotReload, err = communicate.Confirm(s.answers, HotReload)
 		if err != nil {
 			return s.Builder.CreateError(err)
 		}
-		authSelection, err := communicate.Selection(s.answers, AuthProviderOption)
+		authSelection, err := communicate.Choice(s.answers, AuthProviderOption)
 		if err != nil {
 			return s.Builder.CreateError(err)
 		}
-		if authSelection != nil && len(authSelection.Selected) > 0 {
-			s.Settings.AuthProvider = authSelection.Selected[0]
+		if authSelection != nil && authSelection.Option != "" {
+			s.Settings.AuthProvider = authSelection.Option
 		}
 	} else {
 		// Defaults: SSR mode with hot-reload, no auth provider

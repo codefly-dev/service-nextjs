@@ -18,7 +18,32 @@ import (
 	"github.com/codefly-dev/core/resources"
 	"github.com/codefly-dev/core/wool"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/reflect/protoreflect"
 )
+
+func TestAgentInformationAdvertisesValidationContract(t *testing.T) {
+	info, err := NewService().GetAgentInformation(context.Background(), nil)
+	require.NoError(t, err)
+	message := info.ProtoReflect()
+	validationField := message.Descriptor().Fields().ByName("validation")
+	if validationField == nil {
+		t.Skip("published Core pin predates validation advertisement")
+	}
+	validation := message.Get(validationField).Message()
+	for _, operation := range []string{"lint", "compile", "audit", "artifact_build"} {
+		field := validation.Descriptor().Fields().ByName(protoreflect.Name(operation))
+		require.NotNil(t, field)
+		supported := validation.Get(field).Message().Descriptor().Fields().ByName("supported")
+		require.True(t, validation.Get(field).Message().Get(supported).Bool(), operation)
+	}
+	testField := validation.Descriptor().Fields().ByName("test")
+	testValidation := validation.Get(testField).Message()
+	suitesField := testValidation.Descriptor().Fields().ByName("suites")
+	require.Equal(t, 1, testValidation.Get(suitesField).List().Len())
+	suite := testValidation.Get(suitesField).List().Get(0).Message()
+	require.Equal(t, "unit", suite.Get(suite.Descriptor().Fields().ByName("name")).String())
+	require.True(t, suite.Get(suite.Descriptor().Fields().ByName("default_suite")).Bool())
+}
 
 func testIdentity(t *testing.T, tmpDir string) (*basev0.ServiceIdentity, *resources.Environment) {
 	t.Helper()
@@ -50,6 +75,22 @@ func testIdentity(t *testing.T, tmpDir string) (*basev0.ServiceIdentity, *resour
 	return identity, env
 }
 
+func TestParseNPMTestOutputCombinesVitestAndNodeCounts(t *testing.T) {
+	output := `
+ Test Files  44 passed (44)
+      Tests  320 passed (320)
+ℹ tests 2
+ℹ pass 2
+ℹ fail 0
+ℹ skipped 0
+`
+	run, passed, failed, skipped := parseNPMTestOutput(output)
+	require.EqualValues(t, 322, run)
+	require.EqualValues(t, 322, passed)
+	require.Zero(t, failed)
+	require.Zero(t, skipped)
+}
+
 func TestBuilderCreate(t *testing.T) {
 	wool.SetGlobalLogLevel(wool.DEBUG)
 	ctx := context.Background()
@@ -66,6 +107,7 @@ func TestBuilderCreate(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.NotNil(t, resp)
+	require.Contains(t, resp.GetGettingStarted(), "composition root")
 
 	// Create the service
 	createResp, err := builder.Create(ctx, &builderv0.CreateRequest{})
@@ -77,6 +119,7 @@ func TestBuilderCreate(t *testing.T) {
 
 	// Core Next.js files
 	assertFileExists(t, serviceDir, "code/package.json")
+	assertFileExists(t, serviceDir, "code/.gitignore")
 	assertFileExists(t, serviceDir, "code/tsconfig.json")
 	assertFileExists(t, serviceDir, "code/next.config.ts")
 	assertFileExists(t, serviceDir, "code/vitest.config.ts")
@@ -94,6 +137,16 @@ func TestBuilderCreate(t *testing.T) {
 	assertFileExists(t, serviceDir, "code/src/lib/constants.ts")
 	assertFileExists(t, serviceDir, "code/src/lib/transforms/index.ts")
 	assertFileExists(t, serviceDir, "code/src/lib/hooks/index.ts")
+	assertFileExists(t, serviceDir, "code/packages/README.md")
+
+	// The generic agent exposes an additive workspace seam but no competing
+	// product plugin contract, scanner, or side-effect registry. Applications
+	// such as SaaS Starter own their public SDK and explicit composition root.
+	assertFileDoesNotExist(t, serviceDir, "code/src/lib/framework/plugin.ts")
+	assertFileDoesNotExist(t, serviceDir, "code/src/plugins/index.ts")
+	providersContent, err := os.ReadFile(path.Join(serviceDir, "code/src/lib/providers.tsx"))
+	require.NoError(t, err)
+	require.NotContains(t, string(providersContent), `@/plugins`)
 
 	// Stores
 	assertFileExists(t, serviceDir, "code/src/stores/ui-store.ts")
@@ -141,6 +194,20 @@ func TestBuilderSettingsDefaults(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, string(configContent), `"standalone"`)
 	require.NotContains(t, string(configContent), `"export"`)
+}
+
+func TestBuilderOptionsUseSingleChoiceProtocol(t *testing.T) {
+	builder := NewBuilder()
+	builder.Builder.CreationMode = &builderv0.CreationMode{Communicate: true}
+
+	questions := builder.Options()
+	require.Len(t, questions, 3)
+	require.NotNil(t, questions[0].GetChoice(), "deployment mode must be a CLI-compatible single choice")
+	require.NotNil(t, questions[1].GetChoice(), "auth provider must be a CLI-compatible single choice")
+	require.NotNil(t, questions[2].GetConfirm())
+	for _, question := range questions {
+		require.Nil(t, question.GetSelection(), "creation flow must not use unsupported multi-select questions")
+	}
 }
 
 // TestCreateToRun exercises the full lifecycle: Create → npm install → Load → Init → Start → Stop → Destroy.
@@ -236,4 +303,11 @@ func assertFileExists(t *testing.T, base string, rel string) {
 	full := path.Join(base, rel)
 	_, err := os.Stat(full)
 	require.NoError(t, err, "expected file to exist: %s", rel)
+}
+
+func assertFileDoesNotExist(t *testing.T, base string, rel string) {
+	t.Helper()
+	full := path.Join(base, rel)
+	_, err := os.Stat(full)
+	require.ErrorIs(t, err, os.ErrNotExist, "expected file not to exist: %s", rel)
 }

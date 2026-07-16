@@ -36,7 +36,7 @@ var requirements = builders.NewDependencies(agent.Name,
 )
 
 type Settings struct {
-	Mode         string `yaml:"mode"`          // "ssr" (default) or "static"
+	Mode         string `yaml:"mode"` // "ssr" (default) or "static"
 	HotReload    bool   `yaml:"hot-reload"`
 	SourceDir    string `yaml:"source-dir"`    // Next.js source directory relative to service root. Default: "code"
 	AuthProvider string `yaml:"auth-provider"` // "none" (default), "workos"
@@ -94,7 +94,7 @@ func (s *Service) GetAgentInformation(ctx context.Context, _ *agentv0.AgentInfor
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 
-	return services.Advertisement{
+	advertisement := services.Advertisement{
 		Backends: runnersbase.BackendSupport{
 			Local:  func() bool { return languages.HasNodeRuntime(nil) },
 			Nix:    true,
@@ -105,7 +105,9 @@ func (s *Service) GetAgentInformation(ctx context.Context, _ *agentv0.AgentInfor
 		Languages:  []agentv0.Language_Type{agentv0.Language_TYPESCRIPT},
 		Protocols:  []agentv0.Protocol_Type{agentv0.Protocol_HTTP},
 		ReadMe:     readme,
-	}.Build(), nil
+		Validation: nextValidationCapabilities(),
+	}.Build()
+	return advertisement, nil
 }
 
 func NewService() *Service {

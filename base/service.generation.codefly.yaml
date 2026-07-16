@@ -5,7 +5,7 @@ ignores:
   - service.generation.codefly.yaml
   - node_modules
   - .next
-  - .git
+  - .git/
   - package-lock.json
   - AGENTS.md
   - CLAUDE.md
