@@ -10,6 +10,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
+    "format": "biome format --write .",
+    "fix": "biome check --write .",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest"
@@ -37,6 +39,7 @@
     "zustand": "^5.0.0"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.5.4",
     "@tailwindcss/postcss": "^4",
     "@testing-library/jest-dom": "^6.6.0",
     "@testing-library/react": "^16.1.0",

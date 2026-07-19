@@ -3,13 +3,16 @@ package main
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
 	corecode "github.com/codefly-dev/core/code"
+	basev0 "github.com/codefly-dev/core/generated/go/codefly/base/v0"
 	codev0 "github.com/codefly-dev/core/generated/go/codefly/services/code/v0"
+	runners "github.com/codefly-dev/core/runners/base"
 )
 
 // ARCHITECTURE: Code implements the codefly Code gRPC service for NextJS/Node.
@@ -45,7 +48,7 @@ func (c *Code) sourceDir() string {
 }
 
 func (c *Code) InitServer() {
-	c.DefaultCodeServer = corecode.NewDefaultCodeServer(c.sourceDir(), nil)
+	c.DefaultCodeServer = corecode.NewDefaultCodeServer(c.sourceDir())
 	c.registerOverrides()
 	c.initialized = true
 }
@@ -57,23 +60,149 @@ func (c *Code) ensureInit() {
 }
 
 func (c *Code) registerOverrides() {
+	c.SetSourceFixer(c.fixTypeScript)
 	c.Override("get_project_info", c.handleGetProjectInfo)
-}
-
-// Standalone gRPC RPCs.
-
-func (c *Code) GetProjectInfo(ctx context.Context, req *codev0.GetProjectInfoRequest) (*codev0.GetProjectInfoResponse, error) {
-	c.ensureInit()
-	resp, err := c.handleGetProjectInfo(ctx, nil)
-	if err != nil {
-		return nil, err
-	}
-	return resp.GetGetProjectInfo(), nil
 }
 
 func (c *Code) Execute(ctx context.Context, req *codev0.CodeRequest) (*codev0.CodeResponse, error) {
 	c.ensureInit()
 	return c.DefaultCodeServer.Execute(ctx, req)
+}
+
+type nodePackageManifest struct {
+	Scripts         map[string]string `json:"scripts"`
+	Dependencies    map[string]string `json:"dependencies"`
+	DevDependencies map[string]string `json:"devDependencies"`
+}
+
+type eslintJSONResult struct {
+	Output   *string `json:"output"`
+	Messages []struct {
+		RuleID   *string `json:"ruleId"`
+		Severity int     `json:"severity"`
+		Message  string  `json:"message"`
+		Line     int     `json:"line"`
+		Column   int     `json:"column"`
+	} `json:"messages"`
+}
+
+// fixTypeScript selects only project-local tools. Biome is preferred because
+// one stdin invocation performs formatting, safe lint fixes, and import
+// organization. Existing ESLint/Prettier projects use their configured tools
+// without downloading executables during an agent edit.
+func (c *Code) fixTypeScript(ctx context.Context, input corecode.FixInput) (corecode.FixResult, error) {
+	manifest, err := c.readNodePackageManifest()
+	if err != nil {
+		return corecode.FixResult{}, err
+	}
+	env := c.runnerEnvironment(ctx)
+
+	if manifest.hasDependency("@biomejs/biome") {
+		args := []string{"exec", "--offline", "--", "biome", "check", "--stdin-file-path", input.Path, "--write"}
+		if input.Mode == basev0.FixMode_FIX_MODE_AGGRESSIVE {
+			args = append(args, "--unsafe")
+		}
+		fixed, diagnostics, runErr := runners.RunInput(ctx, env, c.sourceDir(), input.Content, "npm", args...)
+		if runErr != nil && len(fixed) == 0 {
+			return corecode.FixResult{}, fmt.Errorf("biome check: %w: %s", runErr, strings.TrimSpace(string(diagnostics)))
+		}
+		return corecode.FixResult{
+			Content: fixed,
+			Actions: []string{"biome check --write"},
+			Output:  strings.TrimSpace(string(diagnostics)),
+		}, nil
+	}
+
+	fixed := input.Content
+	var actions []string
+	var output []string
+	if manifest.hasDependency("eslint") || manifest.Scripts["lint"] != "" {
+		args := []string{"exec", "--offline", "--", "eslint", "--fix-dry-run", "--stdin", "--stdin-filename", input.Path, "--format", "json"}
+		jsonOutput, diagnostics, runErr := runners.RunInput(ctx, env, c.sourceDir(), fixed, "npm", args...)
+		parsed, parseErr := parseESLintFix(jsonOutput, fixed)
+		if parseErr != nil {
+			return corecode.FixResult{}, fmt.Errorf("eslint --fix-dry-run: %w (run error: %v): %s", parseErr, runErr, strings.TrimSpace(string(diagnostics)))
+		}
+		fixed = parsed.Content
+		actions = append(actions, "eslint --fix-dry-run")
+		output = append(output, parsed.Diagnostics...)
+		if text := strings.TrimSpace(string(diagnostics)); text != "" {
+			output = append(output, text)
+		}
+	}
+	if manifest.hasDependency("prettier") {
+		formatted, diagnostics, runErr := runners.RunInput(ctx, env, c.sourceDir(), fixed, "npm", "exec", "--offline", "--", "prettier", "--stdin-filepath", input.Path)
+		if runErr != nil {
+			return corecode.FixResult{}, fmt.Errorf("prettier: %w: %s", runErr, strings.TrimSpace(string(diagnostics)))
+		}
+		fixed = formatted
+		actions = append(actions, "prettier")
+		if text := strings.TrimSpace(string(diagnostics)); text != "" {
+			output = append(output, text)
+		}
+	}
+	if len(actions) == 0 {
+		return corecode.FixResult{}, fmt.Errorf("no project-local Biome, ESLint, or Prettier fixer is configured")
+	}
+	return corecode.FixResult{Content: fixed, Actions: actions, Output: strings.Join(output, "\n")}, nil
+}
+
+func (c *Code) readNodePackageManifest() (*nodePackageManifest, error) {
+	data, err := os.ReadFile(filepath.Join(c.sourceDir(), "package.json"))
+	if err != nil {
+		return nil, fmt.Errorf("read package.json: %w", err)
+	}
+	var manifest nodePackageManifest
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		return nil, fmt.Errorf("parse package.json: %w", err)
+	}
+	return &manifest, nil
+}
+
+func (m *nodePackageManifest) hasDependency(name string) bool {
+	return m.Dependencies[name] != "" || m.DevDependencies[name] != ""
+}
+
+type eslintFix struct {
+	Content     []byte
+	Diagnostics []string
+}
+
+func parseESLintFix(data, original []byte) (eslintFix, error) {
+	var results []eslintJSONResult
+	if err := json.Unmarshal(data, &results); err != nil {
+		return eslintFix{}, err
+	}
+	if len(results) != 1 {
+		return eslintFix{}, fmt.Errorf("expected one ESLint result, got %d", len(results))
+	}
+	result := eslintFix{Content: original}
+	if results[0].Output != nil {
+		result.Content = []byte(*results[0].Output)
+	}
+	for _, message := range results[0].Messages {
+		rule := "eslint"
+		if message.RuleID != nil && *message.RuleID != "" {
+			rule = *message.RuleID
+		}
+		result.Diagnostics = append(result.Diagnostics, fmt.Sprintf("%s:%d:%d: %s: %s", rule, message.Line, message.Column, eslintSeverity(message.Severity), message.Message))
+	}
+	return result, nil
+}
+
+func eslintSeverity(value int) string {
+	if value >= 2 {
+		return "error"
+	}
+	return "warning"
+}
+
+func (c *Code) runnerEnvironment(ctx context.Context) runners.RunnerEnvironment {
+	var runtimeContext *basev0.RuntimeContext
+	if c.Service.Base != nil && c.Service.Base.Runtime != nil {
+		runtimeContext = c.Service.Base.Runtime.RuntimeContext
+	}
+	return runners.ResolveStandaloneEnvironment(ctx, c.sourceDir(), runtimeContext)
 }
 
 // ── Handlers ────────────────────────────────────────────

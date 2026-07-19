@@ -16,6 +16,10 @@ RUN npm ci
 FROM base AS builder
 WORKDIR /app
 COPY code/ .
+# Codefly applications may verify generated service dependencies during their
+# build. Keep the service manifest available to that deterministic check without
+# copying it into the final runtime image.
+COPY service.codefly.yaml /service.codefly.yaml
 # The Codefly archive builder may receive a service tree that already contains
 # host node_modules. Remove it before restoring the clean, lock-derived install;
 # otherwise host-absolute .bin symlinks can shadow the container executables.

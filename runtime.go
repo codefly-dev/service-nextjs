@@ -39,10 +39,8 @@ type Runtime struct {
 	dependenciesMu    sync.Mutex
 }
 
-func NewRuntime() *Runtime {
-	return &Runtime{
-		Service: NewService(),
-	}
+func NewRuntime(service *Service) *Runtime {
+	return &Runtime{Service: service}
 }
 
 // SetRuntimeContext resolves the runtime context by checking available
@@ -180,7 +178,11 @@ func (s *Runtime) Load(ctx context.Context, req *runtimev0.LoadRequest) (*runtim
 
 	s.HttpEndpoint, err = resources.FindHTTPEndpoint(ctx, s.Endpoints)
 	if err != nil {
-		return s.Runtime.LoadErrorf(err, "finding http endpoint")
+		// Source-only checkouts can use Code/Tooling without declaring a
+		// runnable HTTP endpoint. Init remains responsible for rejecting a
+		// missing endpoint when the application lifecycle is requested.
+		s.Wool.Debug("no HTTP endpoint found", wool.ErrField(err))
+		s.HttpEndpoint = nil
 	}
 
 	// Register agent commands
@@ -636,14 +638,9 @@ func (s *Runtime) Lint(ctx context.Context, req *runtimev0.LintRequest) (*runtim
 		req = &runtimev0.LintRequest{}
 	}
 	args := []string{"run", "lint"}
-	if req.Target != "" || req.Fix {
+	if req.Target != "" {
 		args = append(args, "--")
-		if req.Target != "" {
-			args = append(args, req.Target)
-		}
-		if req.Fix {
-			args = append(args, "--fix")
-		}
+		args = append(args, req.Target)
 	}
 	output, err := s.runNPM(ctx, args...)
 	compressed := llmout.Compress("npm", args, output)

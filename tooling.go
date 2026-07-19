@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/codefly-dev/core/failures"
+	basev0 "github.com/codefly-dev/core/generated/go/codefly/base/v0"
 	codev0 "github.com/codefly-dev/core/generated/go/codefly/services/code/v0"
 	runtimev0 "github.com/codefly-dev/core/generated/go/codefly/services/runtime/v0"
 	toolingv0 "github.com/codefly-dev/core/generated/go/codefly/services/tooling/v0"
@@ -18,13 +20,52 @@ type Tooling struct {
 	runtime *Runtime
 }
 
+func (t *Tooling) Fix(ctx context.Context, req *toolingv0.FixRequest) (*toolingv0.FixResponse, error) {
+	response, err := t.code.Execute(ctx, &codev0.CodeRequest{Operation: &codev0.CodeRequest_Fix{Fix: &codev0.FixRequest{
+		File: req.GetFile(), Mode: req.GetMode(), DryRun: req.GetDryRun(),
+	}}})
+	if err != nil {
+		return nil, fmt.Errorf("tooling fix: %w", err)
+	}
+	fix := response.GetFix()
+	if fix == nil {
+		return &toolingv0.FixResponse{Success: false, Failure: failures.Ensure(response.GetFailure(), basev0.FailureCode_FAILURE_CODE_INTERNAL, "tooling.fix", "code service returned no fix result")}, nil
+	}
+	return &toolingv0.FixResponse{
+		Success: fix.Success, Content: fix.Content, Actions: fix.Actions,
+		Failure: failures.Clone(response.GetFailure()), Changed: fix.Changed,
+		BeforeSha256: fix.BeforeSha256, AfterSha256: fix.AfterSha256,
+		Wrote: fix.Wrote, Output: fix.Output,
+	}, nil
+}
+
+func (t *Tooling) ApplyEdit(ctx context.Context, req *toolingv0.ApplyEditRequest) (*toolingv0.ApplyEditResponse, error) {
+	response, err := t.code.Execute(ctx, &codev0.CodeRequest{Operation: &codev0.CodeRequest_ApplyEdit{ApplyEdit: &codev0.ApplyEditRequest{
+		File: req.GetFile(), Find: req.GetFind(), Replace: req.GetReplace(),
+		FixMode: req.GetFixMode(), DryRun: req.GetDryRun(),
+	}}})
+	if err != nil {
+		return nil, fmt.Errorf("tooling apply_edit: %w", err)
+	}
+	edit := response.GetApplyEdit()
+	if edit == nil {
+		return &toolingv0.ApplyEditResponse{Success: false, Failure: failures.Ensure(response.GetFailure(), basev0.FailureCode_FAILURE_CODE_INTERNAL, "tooling.apply-edit", "code service returned no apply-edit result")}, nil
+	}
+	return &toolingv0.ApplyEditResponse{
+		Success: edit.Success, Content: edit.Content, Strategy: edit.Strategy,
+		FixActions: edit.FixActions, Failure: failures.Clone(response.GetFailure()),
+		Changed: edit.Changed, BeforeSha256: edit.BeforeSha256, AfterSha256: edit.AfterSha256,
+		Wrote: edit.Wrote, Output: edit.Output,
+	}, nil
+}
+
 func (t *Tooling) Build(ctx context.Context, _ *toolingv0.BuildRequest) (*toolingv0.BuildResponse, error) {
 	resp, err := t.runtime.Build(ctx, &runtimev0.BuildRequest{})
 	if err != nil {
 		return nil, fmt.Errorf("tooling build: %w", err)
 	}
 	success := resp.GetStatus().GetState() == runtimev0.BuildStatus_SUCCESS
-	return &toolingv0.BuildResponse{Success: success, Output: resp.GetOutput()}, nil
+	return &toolingv0.BuildResponse{Success: success, Output: resp.GetOutput(), Failure: failures.ForOutcome(success, resp.GetStatus().GetFailure(), basev0.FailureCode_FAILURE_CODE_PROCESS_FAILED, "tooling.build", nextToolingFailureSummary("tooling build", resp.GetOutput()))}, nil
 }
 
 func (t *Tooling) Test(ctx context.Context, req *toolingv0.TestRequest) (*toolingv0.TestResponse, error) {
@@ -43,6 +84,7 @@ func (t *Tooling) Test(ctx context.Context, req *toolingv0.TestRequest) (*toolin
 		TestsSkipped: resp.GetTestsSkipped(),
 		CoveragePct:  resp.GetCoveragePct(),
 		Failures:     resp.GetFailures(),
+		Failure:      failures.ForOutcome(success, resp.GetStatus().GetFailure(), basev0.FailureCode_FAILURE_CODE_VALIDATION_FAILED, "tooling.test", nextToolingFailureSummary("tooling test", resp.GetOutput())),
 	}, nil
 }
 
@@ -52,7 +94,7 @@ func (t *Tooling) Lint(ctx context.Context, req *toolingv0.LintRequest) (*toolin
 		return nil, fmt.Errorf("tooling lint: %w", err)
 	}
 	success := resp.GetStatus().GetState() == runtimev0.LintStatus_SUCCESS
-	return &toolingv0.LintResponse{Success: success, Output: resp.GetOutput()}, nil
+	return &toolingv0.LintResponse{Success: success, Output: resp.GetOutput(), Failure: failures.ForOutcome(success, resp.GetStatus().GetFailure(), basev0.FailureCode_FAILURE_CODE_VALIDATION_FAILED, "tooling.lint", nextToolingFailureSummary("tooling lint", resp.GetOutput()))}, nil
 }
 
 func NewTooling(code *Code, runtime *Runtime) *Tooling {
@@ -60,12 +102,24 @@ func NewTooling(code *Code, runtime *Runtime) *Tooling {
 }
 
 func (t *Tooling) GetProjectInfo(ctx context.Context, req *toolingv0.GetProjectInfoRequest) (*toolingv0.GetProjectInfoResponse, error) {
-	resp, err := t.code.GetProjectInfo(ctx, &codev0.GetProjectInfoRequest{})
+	response, err := t.code.Execute(ctx, &codev0.CodeRequest{Operation: &codev0.CodeRequest_GetProjectInfo{GetProjectInfo: &codev0.GetProjectInfoRequest{}}})
 	if err != nil {
 		return nil, fmt.Errorf("tooling get_project_info: %w", err)
+	}
+	resp := response.GetGetProjectInfo()
+	if resp == nil {
+		return &toolingv0.GetProjectInfoResponse{Failure: failures.Ensure(response.GetFailure(), basev0.FailureCode_FAILURE_CODE_INTERNAL, "tooling.get-project-info", "code service returned no project-info result")}, nil
 	}
 	return &toolingv0.GetProjectInfoResponse{
 		Module:          resp.Module,
 		LanguageVersion: resp.LanguageVersion,
+		Failure:         failures.Clone(response.GetFailure()),
 	}, nil
+}
+
+func nextToolingFailureSummary(operation, output string) string {
+	if output == "" {
+		return operation + " failed without structured status"
+	}
+	return output
 }

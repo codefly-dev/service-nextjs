@@ -38,8 +38,7 @@ type Builder struct {
 	relativeToWorkspace string
 }
 
-func NewBuilder() *Builder {
-	service := NewService()
+func NewBuilder(service *Service) *Builder {
 	return &Builder{
 		DefaultBuilder: services.NewDefaultBuilder(service.Builder),
 		Service:        service,

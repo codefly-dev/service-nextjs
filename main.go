@@ -17,6 +17,7 @@ import (
 	runnersbase "github.com/codefly-dev/core/runners/base"
 	"github.com/codefly-dev/core/shared"
 	"github.com/codefly-dev/core/templates"
+	"github.com/codefly-dev/core/toolbox/lang"
 )
 
 // Agent version
@@ -120,13 +121,15 @@ func NewService() *Service {
 func main() {
 	svc := NewService()
 	code := NewCode(svc)
-	runtime := NewRuntime()
+	runtime := NewRuntime(svc)
+	tooling := NewTooling(code, runtime)
 	agents.Serve(agents.PluginRegistration{
 		Agent:   svc,
 		Code:    code,
-		Tooling: NewTooling(code, runtime),
+		Tooling: tooling,
+		Toolbox: lang.NewValidationToolboxFromTooling(agent.Name, agent.Version, tooling),
 		Runtime: runtime,
-		Builder: NewBuilder(),
+		Builder: NewBuilder(svc),
 	})
 }
 

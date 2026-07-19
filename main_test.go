@@ -98,7 +98,7 @@ func TestBuilderCreate(t *testing.T) {
 	tmpDir := t.TempDir()
 	identity, _ := testIdentity(t, tmpDir)
 
-	builder := NewBuilder()
+	builder := NewBuilder(NewService())
 
 	// Load in creation mode (no interactive prompts)
 	resp, err := builder.Load(ctx, &builderv0.LoadRequest{
@@ -177,7 +177,7 @@ func TestBuilderSettingsDefaults(t *testing.T) {
 	tmpDir := t.TempDir()
 	identity, _ := testIdentity(t, tmpDir)
 
-	builder := NewBuilder()
+	builder := NewBuilder(NewService())
 
 	_, err := builder.Load(ctx, &builderv0.LoadRequest{
 		Identity:     identity,
@@ -197,7 +197,7 @@ func TestBuilderSettingsDefaults(t *testing.T) {
 }
 
 func TestBuilderOptionsUseSingleChoiceProtocol(t *testing.T) {
-	builder := NewBuilder()
+	builder := NewBuilder(NewService())
 	builder.Builder.CreationMode = &builderv0.CreationMode{Communicate: true}
 
 	questions := builder.Options()
@@ -224,7 +224,7 @@ func TestCreateToRun(t *testing.T) {
 	identity, env := testIdentity(t, tmpDir)
 
 	// 1. Create
-	builder := NewBuilder()
+	builder := NewBuilder(NewService())
 	_, err := builder.Load(ctx, &builderv0.LoadRequest{
 		Identity:     identity,
 		CreationMode: &builderv0.CreationMode{Communicate: false},
@@ -240,7 +240,7 @@ func TestCreateToRun(t *testing.T) {
 	require.DirExists(t, codeDir)
 
 	// 3. Runtime Load
-	runtime := NewRuntime()
+	runtime := NewRuntime(NewService())
 	envProto, err := env.Proto()
 	require.NoError(t, err)
 	_, err = runtime.Load(ctx, &runtimev0.LoadRequest{

@@ -12,7 +12,6 @@ func nextValidationCapabilities() *agentv0.ValidationCapabilities {
 				agentv0.ValidationScope_VALIDATION_SCOPE_PACKAGE,
 				agentv0.ValidationScope_VALIDATION_SCOPE_FILE,
 			},
-			SupportsFix: true,
 		},
 		Compile: validationOperation(workspace),
 		Test: &agentv0.TestValidationCapability{

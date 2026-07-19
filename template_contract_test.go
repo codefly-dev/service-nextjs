@@ -18,9 +18,10 @@ func TestFactoryTemplateUsesExplicitApplicationOwnedComposition(t *testing.T) {
 		t.Fatalf("read factory package.json: %v", err)
 	}
 	var manifest struct {
-		Workspaces []string          `json:"workspaces"`
-		Scripts    map[string]string `json:"scripts"`
-		Overrides  map[string]string `json:"overrides"`
+		Workspaces      []string          `json:"workspaces"`
+		Scripts         map[string]string `json:"scripts"`
+		Overrides       map[string]string `json:"overrides"`
+		DevDependencies map[string]string `json:"devDependencies"`
 	}
 	if err := json.Unmarshal(packageData, &manifest); err != nil {
 		t.Fatalf("parse factory package.json: %v", err)
@@ -30,6 +31,19 @@ func TestFactoryTemplateUsesExplicitApplicationOwnedComposition(t *testing.T) {
 	}
 	if manifest.Scripts["typecheck"] != "tsc --noEmit" {
 		t.Fatalf("typecheck script = %q", manifest.Scripts["typecheck"])
+	}
+	if manifest.Scripts["lint"] != "eslint" {
+		t.Fatalf("lint must remain read-only, got %q", manifest.Scripts["lint"])
+	}
+	if manifest.Scripts["fix"] != "biome check --write ." || manifest.Scripts["format"] != "biome format --write ." {
+		t.Fatalf("safe fix scripts = fix:%q format:%q", manifest.Scripts["fix"], manifest.Scripts["format"])
+	}
+	if manifest.DevDependencies["@biomejs/biome"] != "^2.5.4" {
+		t.Fatalf("Biome version = %q", manifest.DevDependencies["@biomejs/biome"])
+	}
+	biomeConfig, err := fs.ReadFile(factoryFS, "templates/factory/code/biome.json")
+	if err != nil || !strings.Contains(string(biomeConfig), "schemas/2.5.4/schema.json") {
+		t.Fatalf("Biome config is missing or unpinned: err=%v content=%s", err, biomeConfig)
 	}
 	if manifest.Overrides["postcss"] != "8.5.19" {
 		t.Fatalf("postcss override = %q", manifest.Overrides["postcss"])
@@ -79,6 +93,7 @@ func TestBuilderTemplateInstallsWorkspaceGraphReproducibly(t *testing.T) {
 	for _, required := range []string{
 		"FROM {{.NodeImage}} AS base",
 		"COPY code/packages ./packages",
+		"COPY service.codefly.yaml /service.codefly.yaml",
 		"RUN npm ci",
 		"RUN rm -rf node_modules",
 		"RUN mkdir -p public && npm run build",
