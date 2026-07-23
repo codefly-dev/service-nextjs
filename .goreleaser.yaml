@@ -1,0 +1,30 @@
+version: 2
+
+project_name: service-nextjs
+
+builds:
+  - id: darwin
+    binary: service-nextjs
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+  - id: linux
+    binary: service-nextjs
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+    goarch:
+      - amd64
+
+archives:
+  - id: default
+    formats:
+      - tar.gz
+    # Must match core's downloader: service-{name}_{version}_{os}_{arch}.tar.gz
+    # (agents/manager/downloader_url.go); the binary inside is service-{name}.
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
