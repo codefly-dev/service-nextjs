@@ -10,21 +10,23 @@ import (
 func TestChangedGeneratedFilesDetectsAddsChangesAndRemovals(t *testing.T) {
 	actual := t.TempDir()
 	expected := t.TempDir()
-	writeGeneratedTestFile(t, actual, "same.ts", "same")
-	writeGeneratedTestFile(t, expected, "same.ts", "same")
-	writeGeneratedTestFile(t, actual, "changed.ts", "old")
-	writeGeneratedTestFile(t, expected, "changed.ts", "new")
-	writeGeneratedTestFile(t, actual, "removed.ts", "stale")
-	writeGeneratedTestFile(t, expected, "nested/added.ts", "generated")
+	writeGeneratedTestFile(t, actual, "same_grpc_pb.ts", "same")
+	writeGeneratedTestFile(t, expected, "same_grpc_pb.ts", "same")
+	writeGeneratedTestFile(t, actual, "changed_grpc_pb.ts", "old")
+	writeGeneratedTestFile(t, expected, "changed_grpc_pb.ts", "new")
+	writeGeneratedTestFile(t, actual, "removed_grpc_pb.ts", "stale")
+	writeGeneratedTestFile(t, expected, "added_grpc_pb.ts", "generated")
+	writeGeneratedTestFile(t, actual, "saas/accounts/v1/user_settings_pb.ts", "producer-owned")
+	writeGeneratedTestFile(t, expected, "saas/accounts/v1/user_settings_pb.ts", "different but producer-owned")
 
 	changed, err := changedGeneratedFiles(actual, expected, "module/services/frontend/code/src/gen")
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := []string{
-		"module/services/frontend/code/src/gen/changed.ts",
-		"module/services/frontend/code/src/gen/nested/added.ts",
-		"module/services/frontend/code/src/gen/removed.ts",
+		"module/services/frontend/code/src/gen/added_grpc_pb.ts",
+		"module/services/frontend/code/src/gen/changed_grpc_pb.ts",
+		"module/services/frontend/code/src/gen/removed_grpc_pb.ts",
 	}
 	if !reflect.DeepEqual(changed, want) {
 		t.Fatalf("changed files = %v, want %v", changed, want)
@@ -34,13 +36,32 @@ func TestChangedGeneratedFilesDetectsAddsChangesAndRemovals(t *testing.T) {
 func TestChangedGeneratedFilesTreatsMissingTreesAsEmpty(t *testing.T) {
 	root := t.TempDir()
 	expected := filepath.Join(root, "expected")
-	writeGeneratedTestFile(t, expected, "client.ts", "generated")
+	writeGeneratedTestFile(t, expected, "client_grpc_pb.ts", "generated")
 	changed, err := changedGeneratedFiles(filepath.Join(root, "missing"), expected, "code/src/gen")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(changed, []string{"code/src/gen/client.ts"}) {
+	if !reflect.DeepEqual(changed, []string{"code/src/gen/client_grpc_pb.ts"}) {
 		t.Fatalf("changed files = %v", changed)
+	}
+}
+
+func TestCleanDependencyGeneratedFilesPreservesProducerOwnedTrees(t *testing.T) {
+	root := t.TempDir()
+	writeGeneratedTestFile(t, root, "users_accounts_grpc_pb.ts", "owned")
+	writeGeneratedTestFile(t, root, "saas/accounts/v1/user_settings_pb.ts", "producer-owned")
+	writeGeneratedTestFile(t, root, "manual.ts", "product-owned")
+
+	if err := cleanDependencyGeneratedFiles(root); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "users_accounts_grpc_pb.ts")); !os.IsNotExist(err) {
+		t.Fatalf("owned dependency client still exists: %v", err)
+	}
+	for _, relative := range []string{"saas/accounts/v1/user_settings_pb.ts", "manual.ts"} {
+		if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(relative))); err != nil {
+			t.Fatalf("preserve %s: %v", relative, err)
+		}
 	}
 }
 

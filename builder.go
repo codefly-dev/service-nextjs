@@ -112,6 +112,8 @@ func (s *Builder) Sync(ctx context.Context, req *builderv0.SyncRequest) (*builde
 		}
 		defer os.RemoveAll(temporary)
 		generateDestination = filepath.Join(temporary, "gen")
+	} else if err := cleanDependencyGeneratedFiles(destination); err != nil {
+		return s.Builder.SyncError(err)
 	}
 
 	// Generate TypeScript Connect-ES client code from dependency gRPC endpoints.
@@ -193,10 +195,14 @@ func changedGeneratedFiles(actualRoot, expectedRoot, workspacePrefix string) ([]
 	}
 	paths := map[string]bool{}
 	for path := range actual {
-		paths[path] = true
+		if dependencyGeneratedFile(path) {
+			paths[path] = true
+		}
 	}
 	for path := range expected {
-		paths[path] = true
+		if dependencyGeneratedFile(path) {
+			paths[path] = true
+		}
 	}
 	var changed []string
 	for path := range paths {
@@ -209,6 +215,34 @@ func changedGeneratedFiles(actualRoot, expectedRoot, workspacePrefix string) ([]
 	}
 	sort.Strings(changed)
 	return changed, nil
+}
+
+// cleanDependencyGeneratedFiles removes only the flat dependency clients that
+// this agent owns. A frontend may also keep source-relative protocol output
+// under src/gen/saas, src/gen/google, and src/gen/buf; those files belong to
+// the producing service's Buf contract and must survive a frontend sync.
+func cleanDependencyGeneratedFiles(root string) error {
+	files, err := generatedFiles(root)
+	if err != nil {
+		return err
+	}
+	for relative := range files {
+		if !dependencyGeneratedFile(relative) {
+			continue
+		}
+		if err := os.Remove(filepath.Join(root, filepath.FromSlash(relative))); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func dependencyGeneratedFile(relative string) bool {
+	if filepath.ToSlash(filepath.Dir(relative)) != "." {
+		return false
+	}
+	base := filepath.Base(relative)
+	return strings.Contains(base, "_grpc_") && strings.HasSuffix(base, ".ts")
 }
 
 func generatedFiles(root string) (map[string]generatedFile, error) {
