@@ -1,11 +1,33 @@
 package main
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
+
+	"github.com/Masterminds/semver"
+	proto "github.com/codefly-dev/core/companions/proto"
 )
+
+// The nextjs agent generates its Connect-ES clients with the same proto
+// companion the other agents use. Companion 0.0.11 is where protoc-gen-es was
+// pinned to 2.11.0; an older companion floats es to 2.12.x and drifts every
+// consumer's checked-in client. Guard against regressing below that release.
+func TestProtoCompanionMatchesConnectESToolset(t *testing.T) {
+	image, err := proto.CompanionImage(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	tag, err := semver.NewVersion(image.Tag)
+	if err != nil {
+		t.Fatalf("cannot parse proto companion tag %q: %v", image.Tag, err)
+	}
+	if tag.LessThan(semver.MustParse("0.0.11")) {
+		t.Fatalf("proto companion tag = %q, want >= 0.0.11 (protoc-gen-es 2.11.0)", image.Tag)
+	}
+}
 
 func TestChangedGeneratedFilesDetectsAddsChangesAndRemovals(t *testing.T) {
 	actual := t.TempDir()
