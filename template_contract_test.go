@@ -21,6 +21,7 @@ func TestFactoryTemplateUsesExplicitApplicationOwnedComposition(t *testing.T) {
 		Workspaces      []string          `json:"workspaces"`
 		Scripts         map[string]string `json:"scripts"`
 		Overrides       map[string]string `json:"overrides"`
+		Dependencies    map[string]string `json:"dependencies"`
 		DevDependencies map[string]string `json:"devDependencies"`
 	}
 	if err := json.Unmarshal(packageData, &manifest); err != nil {
@@ -40,6 +41,23 @@ func TestFactoryTemplateUsesExplicitApplicationOwnedComposition(t *testing.T) {
 	}
 	if manifest.DevDependencies["@biomejs/biome"] != "^2.5.4" {
 		t.Fatalf("Biome version = %q", manifest.DevDependencies["@biomejs/biome"])
+	}
+	if manifest.DevDependencies["babel-plugin-react-compiler"] != "1.0.0" {
+		t.Fatalf("React Compiler version = %q", manifest.DevDependencies["babel-plugin-react-compiler"])
+	}
+	for name, version := range map[string]string{
+		"next":      "16.2.11",
+		"react":     "19.2.8",
+		"react-dom": "19.2.8",
+	} {
+		if manifest.Dependencies[name] != version {
+			t.Fatalf("%s version = %q, want %q", name, manifest.Dependencies[name], version)
+		}
+	}
+	for _, unused := range []string{"next-themes", "shadcn"} {
+		if _, ok := manifest.Dependencies[unused]; ok {
+			t.Fatalf("unused dependency %q must not ship in the factory", unused)
+		}
 	}
 	biomeConfig, err := fs.ReadFile(factoryFS, "templates/factory/code/biome.json")
 	if err != nil || !strings.Contains(string(biomeConfig), "schemas/2.5.4/schema.json") {
@@ -65,10 +83,14 @@ func TestFactoryTemplateUsesExplicitApplicationOwnedComposition(t *testing.T) {
 		t.Fatalf("read providers template: %v", err)
 	}
 	providerSource := string(providers)
-	for _, forbidden := range []string{"@/plugins", "plugins.reduce", "self-register"} {
+	for _, forbidden := range []string{"@/plugins", "plugins.reduce", "self-register", "next-themes", "<script"} {
 		if strings.Contains(providerSource, forbidden) {
 			t.Fatalf("providers template contains legacy composition %q", forbidden)
 		}
+	}
+	nextConfig, err := fs.ReadFile(factoryFS, "templates/factory/code/next.config.ts")
+	if err != nil || !strings.Contains(string(nextConfig), "reactCompiler: true") {
+		t.Fatalf("Next config must enable React Compiler: err=%v content=%s", err, nextConfig)
 	}
 
 	packageGuide, err := fs.ReadFile(factoryFS, "templates/factory/code/packages/README.md")
