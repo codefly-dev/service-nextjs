@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"io"
 	"net/http"
@@ -37,6 +38,7 @@ type Runtime struct {
 	runner            runners.Proc
 	workspaceConfigs  []*basev0.Configuration
 	dependenciesMu    sync.Mutex
+	executionProfile  NextExecutionProfile
 }
 
 func NewRuntime(service *Service) *Runtime {
@@ -110,9 +112,39 @@ func (s *Runtime) CreateRunnerEnvironment(ctx context.Context) error {
 
 	switch {
 	case s.Runtime.IsContainerRuntime():
-		dockerEnv, err := dockerrun.NewDockerEnvironment(ctx, image, s.sourceLocation, s.UniqueWithWorkspace())
+		// Mount the Codefly service root, then execute from the configured
+		// source directory. Frontend tooling may legitimately consume service
+		// metadata beside the source tree (for example service.codefly.yaml);
+		// mounting only sourceLocation makes native and container behavior
+		// differ. Both paths come from the loaded Codefly service definition,
+		// never from plugin-specific parent-directory assumptions.
+		dockerEnv, err := dockerrun.NewDockerEnvironment(ctx, image, s.Location, s.UniqueWithWorkspace())
 		if err != nil {
 			return s.Wool.Wrapf(err, "cannot create docker runner environment")
+		}
+		dockerEnv.WithWorkDir(s.sourceLocation)
+		// The source bind mount is intentionally shared so edits remain visible
+		// to Next.js. Its build/runtime state is not source: sharing `.next`
+		// between independently namespaced runs causes their dev-server locks,
+		// caches, and generated files to collide. Core owns and scopes the host
+		// cache path; this plugin only declares the mutable container target.
+		if _, err := dockerEnv.WithPersistentCacheMount(
+			ctx,
+			"next-build",
+			filepath.Join(s.sourceLocation, ".next"),
+		); err != nil {
+			return s.Wool.Wrapf(err, "cannot isolate Next.js runtime state")
+		}
+		dependencyCacheKey, err := nodeDependencyCacheKey(s.sourceLocation)
+		if err != nil {
+			return s.Wool.Wrapf(err, "cannot fingerprint Node dependencies")
+		}
+		if _, err := dockerEnv.WithPersistentCacheMount(
+			ctx,
+			dependencyCacheKey,
+			filepath.Join(s.sourceLocation, "node_modules"),
+		); err != nil {
+			return s.Wool.Wrapf(err, "cannot isolate Node dependencies")
 		}
 		dockerEnv.WithPause()
 		// Bind the HTTP endpoint's container port to the host so the
@@ -163,6 +195,15 @@ func (s *Runtime) Load(ctx context.Context, req *runtimev0.LoadRequest) (*runtim
 	}
 
 	s.Runtime.SetEnvironment(req.Environment)
+	s.executionProfile, err = s.Settings.ExecutionProfileFor(req.GetEnvironment().GetName())
+	if err != nil {
+		return s.Runtime.LoadErrorf(err, "resolving Next.js execution profile")
+	}
+	s.Wool.Info(
+		"resolved Next.js execution profile",
+		wool.Field("environment", req.GetEnvironment().GetName()),
+		wool.Field("profile", s.executionProfile),
+	)
 
 	s.sourceLocation, err = s.LocalDirCreate(ctx, "%s", s.Settings.NodeSourceDir())
 	if err != nil {
@@ -209,6 +250,10 @@ func (s *Runtime) Init(ctx context.Context, req *runtimev0.InitRequest) (*runtim
 	ctx = s.Wool.Inject(ctx)
 
 	s.Runtime.LogInitRequest(req)
+
+	if err := s.SetRuntimeContext(ctx, req.GetRuntimeContext()); err != nil {
+		return s.Runtime.InitErrorf(err, "cannot set runtime context")
+	}
 
 	s.NetworkMappings = req.ProposedNetworkMappings
 
@@ -267,7 +312,7 @@ func (s *Runtime) Init(ctx context.Context, req *runtimev0.InitRequest) (*runtim
 		return s.Runtime.InitError(err)
 	}
 
-	if s.Settings.HotReload {
+	if s.Settings.HotReload && s.executionProfile == NextExecutionDevelopment {
 		dependencies := requirements.Clone()
 		dependencies.Localize(s.Location)
 		conf := services.NewWatchConfiguration(dependencies)
@@ -284,11 +329,11 @@ func (s *Runtime) Start(ctx context.Context, req *runtimev0.StartRequest) (*runt
 	defer s.Wool.Catch()
 	ctx = s.Wool.Inject(ctx)
 
-	if s.Settings.IsStatic() {
-		s.Wool.Forwardf("starting Next.js dev server (static mode)...")
-	} else {
-		s.Wool.Forwardf("starting Next.js dev server (SSR mode)...")
-	}
+	s.Wool.Forwardf(
+		"starting Next.js %s server (%s mode)...",
+		s.executionProfile,
+		s.Settings.Mode,
+	)
 
 	// Stop existing runner
 	if s.runner != nil {
@@ -365,40 +410,60 @@ func (s *Runtime) Start(ctx context.Context, req *runtimev0.StartRequest) (*runt
 		}
 	}
 
-	// Run npm run dev with the assigned port
-	proc, err := s.runnerEnvironment.NewProcess("npm", "run", "dev", "--", "-p", fmt.Sprintf("%d", net.Port))
-	if err != nil {
-		return s.Runtime.StartErrorf(err, "cannot create npm process")
-	}
-
 	allEnvs, err := s.EnvironmentVariables.All()
 	if err != nil {
 		return s.Runtime.StartErrorf(err, "getting environment variables")
 	}
-	proc.WithEnvironmentVariables(ctx, allEnvs...)
-	// Add NEXT_PUBLIC_ browser env vars
-	proc.WithEnvironmentVariables(ctx, browserEnvs...)
-	// Cap process fan-out. Next.js dev mode otherwise spawns jest-worker
-	// pools for SWC transform + type-check, a webpack worker pool, and
-	// node's libuv threadpool — legitimate in prod, but under a multi-
-	// service dev stack this multiplies into hundreds of forks and has
-	// been observed driving macOS past kern.maxprocperuid during
-	// `codefly run` startup. NEXT_PRIVATE_WORKER=1 (previously set here)
-	// is not a real Next.js knob and does nothing — the real caps are
-	// UV_THREADPOOL_SIZE (libuv) and the experimental.cpus / workerThreads
-	// options baked into next.config.ts.
-	proc.WithEnvironmentVariables(ctx,
+	commonRuntimeEnvs := []*resources.EnvironmentVariable{
 		resources.Env("UV_THREADPOOL_SIZE", "2"),
 		resources.Env("NODE_OPTIONS", "--max-old-space-size=2048"),
 		resources.Env("NEXT_TELEMETRY_DISABLED", "1"),
+	}
+	if s.executionProfile == NextExecutionProduction {
+		commonRuntimeEnvs = append(commonRuntimeEnvs, resources.Env("NODE_ENV", "production"))
+		build, buildErr := s.runnerEnvironment.NewProcess("npm", "run", "build")
+		if buildErr != nil {
+			return s.Runtime.StartErrorf(buildErr, "cannot create Next.js production build process")
+		}
+		build.WithEnvironmentVariables(ctx, allEnvs...)
+		build.WithEnvironmentVariables(ctx, browserEnvs...)
+		build.WithEnvironmentVariables(ctx, commonRuntimeEnvs...)
+		build.WithOutput(s.Logger)
+		s.Wool.Forwardf("building immutable Next.js production output...")
+		if buildErr = build.Run(ctx); buildErr != nil {
+			return s.Runtime.StartErrorf(buildErr, "building Next.js production output")
+		}
+	}
+
+	command := "dev"
+	if s.executionProfile == NextExecutionProduction {
+		command = "start"
+	}
+	proc, err := s.runnerEnvironment.NewProcess(
+		"npm",
+		"run",
+		command,
+		"--",
+		"-p",
+		fmt.Sprintf("%d", net.Port),
 	)
+	if err != nil {
+		return s.Runtime.StartErrorf(err, "cannot create npm process")
+	}
+	proc.WithEnvironmentVariables(ctx, allEnvs...)
+	proc.WithEnvironmentVariables(ctx, browserEnvs...)
+	// Cap process fan-out. Next.js development otherwise spawns jest-worker
+	// pools for SWC transform + type-check, a webpack worker pool, and
+	// node's libuv threadpool. The same bounds keep local production builds
+	// from exhausting a multi-service workstation.
+	proc.WithEnvironmentVariables(ctx, commonRuntimeEnvs...)
 	proc.WithOutput(s.Logger)
 
 	s.runner = proc
 	runningContext := s.Wool.Inject(context.Background())
 	err = s.runner.Start(runningContext)
 	if err != nil {
-		return s.Runtime.StartErrorf(err, "starting next.js dev server")
+		return s.Runtime.StartErrorf(err, "starting Next.js %s server", s.executionProfile)
 	}
 
 	// Wait for ready
@@ -412,7 +477,7 @@ func (s *Runtime) Start(ctx context.Context, req *runtimev0.StartRequest) (*runt
 		return s.Runtime.StartError(err)
 	}
 
-	s.Wool.Forwardf("Next.js dev server running on port %d", net.Port)
+	s.Wool.Forwardf("Next.js %s server running on port %d", s.executionProfile, net.Port)
 
 	return s.Runtime.StartResponse()
 }
@@ -674,7 +739,7 @@ func (s *Runtime) ensureNodeDependencies(ctx context.Context) error {
 	if s.runnerEnvironment == nil {
 		return fmt.Errorf("runner environment is not initialized")
 	}
-	if info, err := os.Stat(filepath.Join(s.sourceLocation, "node_modules")); err == nil && info.IsDir() {
+	if s.nodeDependenciesPresent(ctx) {
 		return nil
 	}
 	args := []string{"install"}
@@ -691,6 +756,50 @@ func (s *Runtime) ensureNodeDependencies(ctx context.Context) error {
 		return fmt.Errorf("npm %s failed: %w", strings.Join(args, " "), err)
 	}
 	return nil
+}
+
+func (s *Runtime) nodeDependenciesPresent(ctx context.Context) bool {
+	if !s.Runtime.IsContainerRuntime() {
+		info, err := os.Stat(filepath.Join(s.sourceLocation, "node_modules"))
+		return err == nil && info.IsDir()
+	}
+
+	// The container has a platform-specific cache layered over the host
+	// node_modules path. Inspect from inside the selected runtime; checking the
+	// host would incorrectly treat macOS dependencies as valid for Linux.
+	proc, err := s.runnerEnvironment.NewProcess(
+		"node",
+		"-e",
+		"require.resolve('next/package.json')",
+	)
+	if err != nil {
+		return false
+	}
+	proc.WithOutput(io.Discard)
+	return proc.Run(ctx) == nil
+}
+
+func nodeDependencyCacheKey(sourceLocation string) (string, error) {
+	hash := sha256.New()
+	found := false
+	for _, name := range []string{"package.json", "npm-shrinkwrap.json", "package-lock.json"} {
+		content, err := os.ReadFile(filepath.Join(sourceLocation, name))
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return "", fmt.Errorf("read %s: %w", name, err)
+		}
+		found = true
+		_, _ = hash.Write([]byte(name))
+		_, _ = hash.Write([]byte{0})
+		_, _ = hash.Write(content)
+		_, _ = hash.Write([]byte{0})
+	}
+	if !found {
+		return "", fmt.Errorf("package.json or npm lockfile is required")
+	}
+	return fmt.Sprintf("node-modules-%x", hash.Sum(nil)[:12]), nil
 }
 
 func (s *Runtime) runNPM(ctx context.Context, args ...string) (string, error) {
