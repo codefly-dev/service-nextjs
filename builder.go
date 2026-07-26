@@ -348,11 +348,21 @@ func (s *Builder) Audit(ctx context.Context, req *builderv0.AuditRequest) (*buil
 	defer s.Wool.Catch()
 	ctx = s.Wool.Inject(ctx)
 	dir := s.Local("%s", s.Settings.NodeSourceDir())
-	res, err := audit.Node(ctx, dir, req.IncludeOutdated)
+	res, err := audit.NodeWithOptions(ctx, dir, nodeAuditOptions(req))
 	if err != nil {
 		return s.Builder.AuditError(err)
 	}
 	return s.Builder.AuditResponse(req, res.Findings, res.Outdated, res.Tool, res.Language)
+}
+
+func nodeAuditOptions(req *builderv0.AuditRequest) audit.NodeOptions {
+	if req == nil {
+		return audit.NodeOptions{}
+	}
+	return audit.NodeOptions{
+		IncludeOutdated:        req.GetIncludeOutdated(),
+		IncludeDevDependencies: req.GetIncludeDevDependencies(),
+	}
 }
 
 // SBOM inventories package-lock.json without installing packages or running
