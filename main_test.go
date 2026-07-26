@@ -291,7 +291,9 @@ func TestBuilderOptionsUseSingleChoiceProtocol(t *testing.T) {
 	questions := builder.Options()
 	require.Len(t, questions, 3)
 	require.NotNil(t, questions[0].GetChoice(), "deployment mode must be a CLI-compatible single choice")
+	require.Equal(t, "ssr", questions[0].GetChoice().GetDefaultOption())
 	require.NotNil(t, questions[1].GetChoice(), "auth provider must be a CLI-compatible single choice")
+	require.Equal(t, "none", questions[1].GetChoice().GetDefaultOption())
 	require.NotNil(t, questions[2].GetConfirm())
 	for _, question := range questions {
 		require.Nil(t, question.GetSelection(), "creation flow must not use unsupported multi-select questions")

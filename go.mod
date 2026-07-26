@@ -6,7 +6,7 @@ toolchain go1.26.4
 
 require (
 	github.com/Masterminds/semver v1.5.0
-	github.com/codefly-dev/core v0.2.38
+	github.com/codefly-dev/core v0.2.39
 	github.com/stretchr/testify v1.11.1
 	google.golang.org/grpc v1.80.0
 	google.golang.org/protobuf v1.36.11
@@ -63,6 +63,7 @@ require (
 	github.com/go-openapi/swag/typeutils v0.26.0 // indirect
 	github.com/go-openapi/swag/yamlutils v0.26.0 // indirect
 	github.com/go-viper/mapstructure/v2 v2.5.0 // indirect
+	github.com/gofrs/flock v0.13.0 // indirect
 	github.com/golang/groupcache v0.0.0-20241129210726-2c02b8208cf8 // indirect
 	github.com/google/cel-go v0.28.0 // indirect
 	github.com/google/go-github/v37 v37.0.0 // indirect
