@@ -57,6 +57,54 @@ func TestChangedGeneratedFilesDetectsAddsChangesAndRemovals(t *testing.T) {
 	}
 }
 
+// A dry-run sync generates only the flat dependency client into the temporary
+// tree, while the committed tree also carries the per-file protocol layout that
+// the gRPC dependency's own buf.gen cross-writes (saas/accounts/v1/**, plus the
+// shared google/** and buf/** deps). None of that foreign subtree is produced
+// by this builder, so comparing the partial dry-run output against the full
+// committed tree must report no drift. Mirrors module-saas-starter frontend.
+func TestChangedGeneratedFilesIgnoresCrossWrittenDependencyTree(t *testing.T) {
+	committed := t.TempDir()
+	fresh := t.TempDir()
+
+	// The one file this builder generates, byte-identical on regeneration.
+	const flatClient = "saas-starter_accounts_grpc_pb.ts"
+	writeGeneratedTestFile(t, committed, flatClient, "// protoc-gen-es\nflat client")
+	writeGeneratedTestFile(t, fresh, flatClient, "// protoc-gen-es\nflat client")
+
+	// The accounts service's buf.gen cross-writes these into src/gen; the shared
+	// google/** and buf/** dependency output lives there too. Only committed.
+	crossWritten := []string{
+		"saas/accounts/v1/api_keys_pb.ts",
+		"saas/accounts/v1/audit_pb.ts",
+		"saas/accounts/v1/authentication_pb.ts",
+		"saas/accounts/v1/authorization_pb.ts",
+		"saas/accounts/v1/billing_pb.ts",
+		"saas/accounts/v1/common_pb.ts",
+		"saas/accounts/v1/identity_pb.ts",
+		"saas/accounts/v1/organizations_pb.ts",
+		"saas/accounts/v1/teams_pb.ts",
+		"saas/accounts/v1/user_settings_pb.ts",
+		"saas/accounts/v1/frontend_catalog.ts",
+		"saas/billing/v1/jobs_pb.ts",
+		"saas/frontend/v1/plugin_catalog.ts",
+		"google/api/annotations_pb.ts",
+		"google/api/http_pb.ts",
+		"buf/validate/validate_pb.ts",
+	}
+	for _, relative := range crossWritten {
+		writeGeneratedTestFile(t, committed, relative, "// protoc-gen-es\nproducer-owned")
+	}
+
+	changed, err := changedGeneratedFiles(committed, fresh, "module/services/frontend/code/src/gen")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(changed) != 0 {
+		t.Fatalf("cross-written dependency tree flagged as drift: %v", changed)
+	}
+}
+
 func TestChangedGeneratedFilesTreatsMissingTreesAsEmpty(t *testing.T) {
 	root := t.TempDir()
 	expected := filepath.Join(root, "expected")
