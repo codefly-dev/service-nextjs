@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"embed"
+	"fmt"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -37,10 +38,11 @@ var requirements = builders.NewDependencies(agent.Name,
 )
 
 type Settings struct {
-	Mode         string `yaml:"mode"` // "ssr" (default) or "static"
-	HotReload    bool   `yaml:"hot-reload"`
-	SourceDir    string `yaml:"source-dir"`    // Next.js source directory relative to service root. Default: "code"
-	AuthProvider string `yaml:"auth-provider"` // "none" (default), "workos"
+	Mode              string            `yaml:"mode"` // "ssr" (default) or "static"
+	HotReload         bool              `yaml:"hot-reload"`
+	SourceDir         string            `yaml:"source-dir"`         // Next.js source directory relative to service root. Default: "code"
+	AuthProvider      string            `yaml:"auth-provider"`      // "none" (default), "workos"
+	ExecutionProfiles map[string]string `yaml:"execution-profiles"` // Codefly environment name → "development" or "production"
 
 	// RuntimeImage overrides the codefly-built runtime image. Format:
 	// "name:tag". :latest and untagged refs are rejected — pinning is
@@ -48,6 +50,51 @@ type Settings struct {
 	// Field named RuntimeImage (not DockerImage) to avoid colliding with
 	// services.Base.DockerImage(req) which is the build-time image method.
 	RuntimeImage string `yaml:"docker-image"`
+}
+
+type NextExecutionProfile string
+
+const (
+	NextExecutionDevelopment NextExecutionProfile = "development"
+	NextExecutionProduction  NextExecutionProfile = "production"
+)
+
+// ExecutionProfileFor resolves runtime behavior from an explicit Codefly
+// environment-to-profile mapping. Local remains development by default for
+// backwards compatibility. Every non-local environment must opt into a real
+// profile so a production run can never silently start `next dev`.
+func (s *Settings) ExecutionProfileFor(environment string) (NextExecutionProfile, error) {
+	if environment == "" {
+		environment = "local"
+	}
+	value, configured := s.ExecutionProfiles[environment]
+	if !configured {
+		if environment == "local" {
+			return NextExecutionDevelopment, nil
+		}
+		return "", fmt.Errorf(
+			"Next.js environment %q requires spec.execution-profiles.%s to be development or production",
+			environment,
+			environment,
+		)
+	}
+	switch NextExecutionProfile(value) {
+	case NextExecutionDevelopment:
+		return NextExecutionDevelopment, nil
+	case NextExecutionProduction:
+		if s.IsStatic() {
+			return "", fmt.Errorf(
+				"Next.js production runtime profile currently requires mode ssr; static services run from their built deployment image",
+			)
+		}
+		return NextExecutionProduction, nil
+	default:
+		return "", fmt.Errorf(
+			"invalid Next.js execution profile %q for environment %q; expected development or production",
+			value,
+			environment,
+		)
+	}
 }
 
 // NodeSourceDir returns the configured source directory, defaulting to "code".

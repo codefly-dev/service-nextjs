@@ -456,6 +456,9 @@ func (s *Builder) Create(ctx context.Context, req *builderv0.CreateRequest) (*bu
 		s.Settings.Mode = "ssr"
 		s.Settings.HotReload = true
 		s.Settings.AuthProvider = "none"
+		s.Settings.ExecutionProfiles = map[string]string{
+			"local": string(NextExecutionDevelopment),
+		}
 	}
 
 	create := CreateConfiguration{

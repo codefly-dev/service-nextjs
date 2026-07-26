@@ -91,6 +91,93 @@ func TestParseNPMTestOutputCombinesVitestAndNodeCounts(t *testing.T) {
 	require.Zero(t, skipped)
 }
 
+func TestInitAppliesRequestedRuntimeContextBeforeNetworkValidation(t *testing.T) {
+	ctx := context.Background()
+	tmpDir := t.TempDir()
+	identity, environment := testIdentity(t, tmpDir)
+
+	builder := NewBuilder(NewService())
+	_, err := builder.Load(ctx, &builderv0.LoadRequest{
+		Identity:     identity,
+		CreationMode: &builderv0.CreationMode{Communicate: false},
+	})
+	require.NoError(t, err)
+	_, err = builder.Create(ctx, &builderv0.CreateRequest{})
+	require.NoError(t, err)
+
+	runtime := NewRuntime(NewService())
+	environmentProto, err := environment.Proto()
+	require.NoError(t, err)
+	_, err = runtime.Load(ctx, &runtimev0.LoadRequest{
+		Identity:     identity,
+		Environment:  environmentProto,
+		DisableCatch: true,
+	})
+	require.NoError(t, err)
+
+	response, err := runtime.Init(ctx, &runtimev0.InitRequest{
+		RuntimeContext: resources.NewRuntimeContextContainer(),
+	})
+	require.NoError(t, err, "runtime failures are returned in the typed init status")
+	require.Equal(t, runtimev0.InitStatus_ERROR, response.GetStatus().GetState())
+	require.NotNil(t, runtime.Runtime.RuntimeContext)
+	require.Equal(t, resources.RuntimeContextContainer, runtime.Runtime.RuntimeContext.Kind)
+}
+
+func TestNodeDependencyCacheKeyTracksDependencyInputsOnly(t *testing.T) {
+	source := t.TempDir()
+	require.NoError(t, os.WriteFile(path.Join(source, "package.json"), []byte(`{"name":"frontend"}`), 0o644))
+	require.NoError(t, os.WriteFile(path.Join(source, "package-lock.json"), []byte(`{"lockfileVersion":3}`), 0o644))
+
+	first, err := nodeDependencyCacheKey(source)
+	require.NoError(t, err)
+	require.Contains(t, first, "node-modules-")
+
+	require.NoError(t, os.WriteFile(path.Join(source, "page.tsx"), []byte("export default 1"), 0o644))
+	afterSourceEdit, err := nodeDependencyCacheKey(source)
+	require.NoError(t, err)
+	require.Equal(t, first, afterSourceEdit)
+
+	require.NoError(t, os.WriteFile(path.Join(source, "package-lock.json"), []byte(`{"lockfileVersion":3,"changed":true}`), 0o644))
+	afterLockEdit, err := nodeDependencyCacheKey(source)
+	require.NoError(t, err)
+	require.NotEqual(t, first, afterLockEdit)
+}
+
+func TestExecutionProfilesAreExplicitOutsideLocal(t *testing.T) {
+	settings := &Settings{Mode: "ssr"}
+
+	local, err := settings.ExecutionProfileFor("local")
+	require.NoError(t, err)
+	require.Equal(t, NextExecutionDevelopment, local)
+
+	_, err = settings.ExecutionProfileFor("production")
+	require.ErrorContains(t, err, "requires spec.execution-profiles.production")
+
+	settings.ExecutionProfiles = map[string]string{
+		"local":      "development",
+		"production": "production",
+	}
+	production, err := settings.ExecutionProfileFor("production")
+	require.NoError(t, err)
+	require.Equal(t, NextExecutionProduction, production)
+
+	settings.ExecutionProfiles["production"] = "prod"
+	_, err = settings.ExecutionProfileFor("production")
+	require.ErrorContains(t, err, "expected development or production")
+}
+
+func TestStaticProductionProfileFailsClosed(t *testing.T) {
+	settings := &Settings{
+		Mode: "static",
+		ExecutionProfiles: map[string]string{
+			"production": "production",
+		},
+	}
+	_, err := settings.ExecutionProfileFor("production")
+	require.ErrorContains(t, err, "requires mode ssr")
+}
+
 func TestBuilderCreate(t *testing.T) {
 	wool.SetGlobalLogLevel(wool.DEBUG)
 	ctx := context.Background()
@@ -167,6 +254,7 @@ func TestBuilderCreate(t *testing.T) {
 	// Verify settings defaults
 	require.Equal(t, "ssr", builder.Settings.Mode)
 	require.True(t, builder.Settings.HotReload)
+	require.Equal(t, "development", builder.Settings.ExecutionProfiles["local"])
 }
 
 func TestBuilderSettingsDefaults(t *testing.T) {
