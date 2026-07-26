@@ -57,7 +57,7 @@ func TestChangedGeneratedFilesDetectsAddsChangesAndRemovals(t *testing.T) {
 	}
 }
 
-// A dry-run sync generates only the flat dependency client into the temporary
+// A dry-run sync generates only the flat dependency clients into the temporary
 // tree, while the committed tree also carries the per-file protocol layout that
 // the gRPC dependency's own buf.gen cross-writes (saas/accounts/v1/**, plus the
 // shared google/** and buf/** deps). None of that foreign subtree is produced
@@ -67,10 +67,14 @@ func TestChangedGeneratedFilesIgnoresCrossWrittenDependencyTree(t *testing.T) {
 	committed := t.TempDir()
 	fresh := t.TempDir()
 
-	// The one file this builder generates, byte-identical on regeneration.
-	const flatClient = "saas-starter_accounts_grpc_pb.ts"
-	writeGeneratedTestFile(t, committed, flatClient, "// protoc-gen-es\nflat client")
-	writeGeneratedTestFile(t, fresh, flatClient, "// protoc-gen-es\nflat client")
+	// The flat clients this builder generates: one byte-identical on
+	// regeneration, one whose committed copy has genuinely drifted. Only the
+	// drifted one must be reported, proving the builder still diffs its own
+	// output while ignoring the cross-written subtree below.
+	writeGeneratedTestFile(t, committed, "saas-starter_accounts_grpc_pb.ts", "// protoc-gen-es\nflat client")
+	writeGeneratedTestFile(t, fresh, "saas-starter_accounts_grpc_pb.ts", "// protoc-gen-es\nflat client")
+	writeGeneratedTestFile(t, committed, "saas-starter_billing_grpc_pb.ts", "// protoc-gen-es\nstale client")
+	writeGeneratedTestFile(t, fresh, "saas-starter_billing_grpc_pb.ts", "// protoc-gen-es\nregenerated client")
 
 	// The accounts service's buf.gen cross-writes these into src/gen; the shared
 	// google/** and buf/** dependency output lives there too. Only committed.
@@ -100,8 +104,9 @@ func TestChangedGeneratedFilesIgnoresCrossWrittenDependencyTree(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(changed) != 0 {
-		t.Fatalf("cross-written dependency tree flagged as drift: %v", changed)
+	want := []string{"module/services/frontend/code/src/gen/saas-starter_billing_grpc_pb.ts"}
+	if !reflect.DeepEqual(changed, want) {
+		t.Fatalf("changed files = %v, want %v", changed, want)
 	}
 }
 
