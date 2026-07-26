@@ -178,6 +178,35 @@ func TestStaticProductionProfileFailsClosed(t *testing.T) {
 	require.ErrorContains(t, err, "requires mode ssr")
 }
 
+func TestParseNPMTestOutputHandlesColorizedVitestSummary(t *testing.T) {
+	// Vitest colorizes its summary when attached to a TTY/pty, attaching ANSI
+	// escapes to the count tokens (e.g. "384 passed\x1b[39m").
+	output := "\x1b[32m Tests \x1b[39m \x1b[1m384 passed\x1b[22m\x1b[39m (384)\n"
+	run, passed, failed, skipped := parseNPMTestOutput(output)
+	require.EqualValues(t, 384, run)
+	require.EqualValues(t, 384, passed)
+	require.Zero(t, failed)
+	require.Zero(t, skipped)
+}
+
+func TestParseNPMTestOutputHandlesNodeTAPSummary(t *testing.T) {
+	// node --test defaults to the TAP reporter when stdout is not a TTY.
+	output := `
+# tests 2
+# suites 0
+# pass 2
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+`
+	run, passed, failed, skipped := parseNPMTestOutput(output)
+	require.EqualValues(t, 2, run)
+	require.EqualValues(t, 2, passed)
+	require.Zero(t, failed)
+	require.Zero(t, skipped)
+}
+
 func TestBuilderCreate(t *testing.T) {
 	wool.SetGlobalLogLevel(wool.DEBUG)
 	ctx := context.Background()
