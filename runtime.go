@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -435,18 +437,24 @@ func (s *Runtime) Start(ctx context.Context, req *runtimev0.StartRequest) (*runt
 		}
 	}
 
-	command := "dev"
-	if s.executionProfile == NextExecutionProduction {
-		command = "start"
-	}
-	proc, err := s.runnerEnvironment.NewProcess(
-		"npm",
+	command := "npm"
+	commandArgs := []string{
 		"run",
-		command,
+		"dev",
 		"--",
 		"-p",
 		fmt.Sprintf("%d", net.Port),
-	)
+	}
+	if s.executionProfile == NextExecutionProduction {
+		launch, launchErr := prepareProductionServer(s.sourceLocation, net.Port)
+		if launchErr != nil {
+			return s.Runtime.StartErrorf(launchErr, "preparing Next.js production server")
+		}
+		command = launch.command
+		commandArgs = launch.args
+		commonRuntimeEnvs = append(commonRuntimeEnvs, launch.environment...)
+	}
+	proc, err := s.runnerEnvironment.NewProcess(command, commandArgs...)
 	if err != nil {
 		return s.Runtime.StartErrorf(err, "cannot create npm process")
 	}
@@ -480,6 +488,97 @@ func (s *Runtime) Start(ctx context.Context, req *runtimev0.StartRequest) (*runt
 	s.Wool.Forwardf("Next.js %s server running on port %d", s.executionProfile, net.Port)
 
 	return s.Runtime.StartResponse()
+}
+
+type productionServerLaunch struct {
+	command     string
+	args        []string
+	environment []*resources.EnvironmentVariable
+}
+
+// prepareProductionServer selects the runtime that matches the build output.
+// `next start` explicitly rejects `output: "standalone"` projects. For those
+// projects Next emits a self-contained server, but its static and public
+// assets still need to be staged beside that server just as the deployment
+// Dockerfile does.
+func prepareProductionServer(sourceLocation string, port uint32) (productionServerLaunch, error) {
+	fallback := productionServerLaunch{
+		command: "npm",
+		args: []string{
+			"run",
+			"start",
+			"--",
+			"-p",
+			fmt.Sprintf("%d", port),
+		},
+	}
+
+	manifestPath := filepath.Join(sourceLocation, ".next", "required-server-files.json")
+	content, err := os.ReadFile(manifestPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return fallback, nil
+	}
+	if err != nil {
+		return productionServerLaunch{}, fmt.Errorf("read Next.js build manifest: %w", err)
+	}
+	var manifest struct {
+		Config struct {
+			Output string `json:"output"`
+		} `json:"config"`
+	}
+	if err := json.Unmarshal(content, &manifest); err != nil {
+		return productionServerLaunch{}, fmt.Errorf("parse Next.js build manifest: %w", err)
+	}
+	if manifest.Config.Output != "standalone" {
+		return fallback, nil
+	}
+
+	standaloneRoot := filepath.Join(sourceLocation, ".next", "standalone")
+	serverPath := filepath.Join(standaloneRoot, "server.js")
+	if _, err := os.Stat(serverPath); err != nil {
+		return productionServerLaunch{}, fmt.Errorf("standalone build is missing server.js: %w", err)
+	}
+	for _, assets := range []struct {
+		source      string
+		destination string
+	}{
+		{
+			source:      filepath.Join(sourceLocation, "public"),
+			destination: filepath.Join(standaloneRoot, "public"),
+		},
+		{
+			source:      filepath.Join(sourceLocation, ".next", "static"),
+			destination: filepath.Join(standaloneRoot, ".next", "static"),
+		},
+	} {
+		if err := stageGeneratedAssets(assets.source, assets.destination); err != nil {
+			return productionServerLaunch{}, err
+		}
+	}
+
+	return productionServerLaunch{
+		command: "node",
+		args:    []string{filepath.ToSlash(filepath.Join(".next", "standalone", "server.js"))},
+		environment: []*resources.EnvironmentVariable{
+			resources.Env("PORT", fmt.Sprintf("%d", port)),
+			resources.Env("HOSTNAME", "0.0.0.0"),
+		},
+	}, nil
+}
+
+func stageGeneratedAssets(source, destination string) error {
+	if _, err := os.Stat(source); errors.Is(err, os.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return fmt.Errorf("inspect Next.js production assets %s: %w", source, err)
+	}
+	if err := os.RemoveAll(destination); err != nil {
+		return fmt.Errorf("replace staged Next.js production assets %s: %w", destination, err)
+	}
+	if err := os.CopyFS(destination, os.DirFS(source)); err != nil {
+		return fmt.Errorf("stage Next.js production assets from %s: %w", source, err)
+	}
+	return nil
 }
 
 func (s *Runtime) WaitForReady(ctx context.Context, net *basev0.NetworkInstance) error {
