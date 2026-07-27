@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -837,10 +838,14 @@ func combineRegex(patterns []string) string {
 	return "(" + strings.Join(patterns, "|") + ")"
 }
 
+// ansiEscape matches ANSI CSI escape sequences (e.g. color codes) that runners
+// emit when attached to a TTY/pty, so they can be stripped before tokenizing.
+var ansiEscape = regexp.MustCompile("\x1b\\[[0-9;]*[a-zA-Z]")
+
 // parseVitestOutput extracts test counts from vitest output.
 func parseVitestOutput(output string) (run, passed, failed, skipped int32) {
 	for _, line := range strings.Split(output, "\n") {
-		line = strings.TrimSpace(line)
+		line = strings.TrimSpace(ansiEscape.ReplaceAllString(line, ""))
 		if strings.Contains(line, "Tests") && (strings.Contains(line, "passed") || strings.Contains(line, "failed")) {
 			// Vitest format: "Tests  4 passed (4)"
 			parts := strings.Fields(line)
@@ -870,15 +875,21 @@ func parseNPMTestOutput(output string) (run, passed, failed, skipped int32) {
 	run, passed, failed, skipped = parseVitestOutput(output)
 	var nodeRun, nodePassed, nodeFailed, nodeSkipped int32
 	for _, line := range strings.Split(output, "\n") {
-		line = strings.TrimSpace(line)
+		line = strings.TrimSpace(ansiEscape.ReplaceAllString(line, ""))
 		for _, item := range []struct {
 			prefix string
 			value  *int32
 		}{
+			// node --test spec reporter (TTY default)
 			{"ℹ tests ", &nodeRun},
 			{"ℹ pass ", &nodePassed},
 			{"ℹ fail ", &nodeFailed},
 			{"ℹ skipped ", &nodeSkipped},
+			// node --test TAP reporter (non-TTY default)
+			{"# tests ", &nodeRun},
+			{"# pass ", &nodePassed},
+			{"# fail ", &nodeFailed},
+			{"# skipped ", &nodeSkipped},
 		} {
 			if strings.HasPrefix(line, item.prefix) {
 				_, _ = fmt.Sscanf(strings.TrimPrefix(line, item.prefix), "%d", item.value)
