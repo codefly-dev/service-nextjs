@@ -4,6 +4,8 @@ import (
 	"context"
 	"embed"
 	"fmt"
+	"strings"
+	"time"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -43,6 +45,10 @@ type Settings struct {
 	SourceDir         string            `yaml:"source-dir"`         // Next.js source directory relative to service root. Default: "code"
 	AuthProvider      string            `yaml:"auth-provider"`      // "none" (default), "workos"
 	ExecutionProfiles map[string]string `yaml:"execution-profiles"` // Codefly environment name → "development" or "production"
+	// ReadinessTimeout optionally overrides the profile-aware startup probe
+	// deadline. Use a Go duration such as "90s" or "3m". Development defaults
+	// longer because the first request can cold-compile the application.
+	ReadinessTimeout string `yaml:"readiness-timeout,omitempty"`
 
 	// RuntimeImage overrides the codefly-built runtime image. Format:
 	// "name:tag". :latest and untagged refs are rejected — pinning is
@@ -95,6 +101,41 @@ func (s *Settings) ExecutionProfileFor(environment string) (NextExecutionProfile
 			environment,
 		)
 	}
+}
+
+const (
+	developmentReadinessTimeout = 2 * time.Minute
+	productionReadinessTimeout  = 30 * time.Second
+	maximumReadinessTimeout     = 10 * time.Minute
+)
+
+// ReadinessTimeoutFor returns a bounded, profile-aware process readiness
+// deadline. A cold development server may compile its first route, while an
+// immutable production build should start quickly. Operators can override the
+// default without requiring a new agent build.
+func (s *Settings) ReadinessTimeoutFor(profile NextExecutionProfile) (time.Duration, error) {
+	configured := strings.TrimSpace(s.ReadinessTimeout)
+	if configured == "" {
+		if profile == NextExecutionProduction {
+			return productionReadinessTimeout, nil
+		}
+		return developmentReadinessTimeout, nil
+	}
+	timeout, err := time.ParseDuration(configured)
+	if err != nil {
+		return 0, fmt.Errorf(
+			"invalid Next.js readiness timeout %q: use a duration such as 90s or 3m",
+			configured,
+		)
+	}
+	if timeout <= 0 || timeout > maximumReadinessTimeout {
+		return 0, fmt.Errorf(
+			"invalid Next.js readiness timeout %q: expected a value greater than zero and at most %s",
+			configured,
+			maximumReadinessTimeout,
+		)
+	}
+	return timeout, nil
 }
 
 // NodeSourceDir returns the configured source directory, defaulting to "code".

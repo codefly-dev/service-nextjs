@@ -19,6 +19,18 @@ by side effect.
 codefly run
 ```
 
+The runtime allows two execution-profile-aware startup defaults: development
+waits up to two minutes for a cold first-route compilation, while production
+waits 30 seconds after its immutable build. Exceptionally large applications
+can override either deadline in `service.codefly.yaml`:
+
+```yaml
+spec:
+  readiness-timeout: 3m
+```
+
+The value must be a positive duration no greater than ten minutes.
+
 ## Build
 
 The service builds as a standalone Docker image for production deployment.

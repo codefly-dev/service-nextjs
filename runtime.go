@@ -42,6 +42,7 @@ type Runtime struct {
 	workspaceConfigs  []*basev0.Configuration
 	dependenciesMu    sync.Mutex
 	executionProfile  NextExecutionProfile
+	readinessTimeout  time.Duration
 }
 
 func NewRuntime(service *Service) *Runtime {
@@ -202,10 +203,15 @@ func (s *Runtime) Load(ctx context.Context, req *runtimev0.LoadRequest) (*runtim
 	if err != nil {
 		return s.Runtime.LoadErrorf(err, "resolving Next.js execution profile")
 	}
+	s.readinessTimeout, err = s.Settings.ReadinessTimeoutFor(s.executionProfile)
+	if err != nil {
+		return s.Runtime.LoadErrorf(err, "resolving Next.js readiness timeout")
+	}
 	s.Wool.Info(
 		"resolved Next.js execution profile",
 		wool.Field("environment", req.GetEnvironment().GetName()),
 		wool.Field("profile", s.executionProfile),
+		wool.Field("readiness_timeout", s.readinessTimeout),
 	)
 
 	s.sourceLocation, err = s.LocalDirCreate(ctx, "%s", s.Settings.NodeSourceDir())
@@ -587,19 +593,71 @@ func (s *Runtime) WaitForReady(ctx context.Context, net *basev0.NetworkInstance)
 	ctx = s.Wool.Inject(ctx)
 
 	address := net.Address
-	s.Wool.Debug("waiting for Next.js to be ready", wool.Field("address", address))
+	timeout := s.readinessTimeout
+	if timeout <= 0 {
+		var err error
+		timeout, err = s.Settings.ReadinessTimeoutFor(s.executionProfile)
+		if err != nil {
+			return s.Wool.Wrapf(err, "resolving Next.js readiness timeout")
+		}
+	}
+	s.Wool.Debug(
+		"waiting for Next.js to be ready",
+		wool.Field("address", address),
+		wool.Field("timeout", timeout),
+	)
 
-	maxRetry := 30
-	for retry := 0; retry < maxRetry; retry++ {
-		resp, err := http.Get(address)
+	client := &http.Client{Timeout: 2 * time.Second}
+	if err := waitForHTTPReady(ctx, client, address, timeout, 250*time.Millisecond); err != nil {
+		return s.Wool.Wrapf(err, "Next.js readiness probe failed")
+	}
+	s.Wool.Debug("Next.js is ready!")
+	return nil
+}
+
+func waitForHTTPReady(
+	ctx context.Context,
+	client *http.Client,
+	address string,
+	timeout time.Duration,
+	pollInterval time.Duration,
+) error {
+	if client == nil {
+		return errors.New("readiness HTTP client is required")
+	}
+	if timeout <= 0 {
+		return errors.New("readiness timeout must be greater than zero")
+	}
+	if pollInterval <= 0 {
+		return errors.New("readiness poll interval must be greater than zero")
+	}
+
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
+
+	var lastErr error
+	for {
+		request, err := http.NewRequestWithContext(ctx, http.MethodGet, address, nil)
+		if err != nil {
+			return fmt.Errorf("build readiness request: %w", err)
+		}
+		response, err := client.Do(request)
 		if err == nil {
-			resp.Body.Close()
-			s.Wool.Debug("Next.js is ready!")
+			_ = response.Body.Close()
 			return nil
 		}
-		time.Sleep(1 * time.Second)
+		lastErr = err
+
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("readiness canceled: %w", ctx.Err())
+		case <-timer.C:
+			return fmt.Errorf("not ready after %s (last probe: %v)", timeout, lastErr)
+		case <-ticker.C:
+		}
 	}
-	return s.Wool.NewError("Next.js is not ready after 30 seconds")
 }
 
 func (s *Runtime) Information(ctx context.Context, req *runtimev0.InformationRequest) (*runtimev0.InformationResponse, error) {
