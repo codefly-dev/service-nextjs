@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -139,7 +140,14 @@ func (s *Runtime) CreateRunnerEnvironment(ctx context.Context) error {
 		); err != nil {
 			return s.Wool.Wrapf(err, "cannot isolate Next.js runtime state")
 		}
-		dependencyCacheKey, err := nodeDependencyCacheKey(s.sourceLocation)
+		// Lockfiles do not fully identify node_modules: optional native
+		// packages such as esbuild and lightningcss are selected for the
+		// execution platform. Never mount an amd64 cache into an arm64
+		// container running the same checkout.
+		dependencyCacheKey, err := nodeDependencyCacheKey(
+			s.sourceLocation,
+			"linux-"+runtime.GOARCH,
+		)
 		if err != nil {
 			return s.Wool.Wrapf(err, "cannot fingerprint Node dependencies")
 		}
@@ -937,8 +945,13 @@ func (s *Runtime) nodeDependenciesPresent(ctx context.Context) bool {
 	return proc.Run(ctx) == nil
 }
 
-func nodeDependencyCacheKey(sourceLocation string) (string, error) {
+func nodeDependencyCacheKey(sourceLocation, executionPlatform string) (string, error) {
+	if strings.TrimSpace(executionPlatform) == "" {
+		return "", fmt.Errorf("Node dependency execution platform is required")
+	}
 	hash := sha256.New()
+	_, _ = hash.Write([]byte(executionPlatform))
+	_, _ = hash.Write([]byte{0})
 	found := false
 	for _, name := range []string{"package.json", "npm-shrinkwrap.json", "package-lock.json"} {
 		content, err := os.ReadFile(filepath.Join(sourceLocation, name))

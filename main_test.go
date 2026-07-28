@@ -129,19 +129,31 @@ func TestNodeDependencyCacheKeyTracksDependencyInputsOnly(t *testing.T) {
 	require.NoError(t, os.WriteFile(path.Join(source, "package.json"), []byte(`{"name":"frontend"}`), 0o644))
 	require.NoError(t, os.WriteFile(path.Join(source, "package-lock.json"), []byte(`{"lockfileVersion":3}`), 0o644))
 
-	first, err := nodeDependencyCacheKey(source)
+	first, err := nodeDependencyCacheKey(source, "linux-arm64")
 	require.NoError(t, err)
 	require.Contains(t, first, "node-modules-")
 
 	require.NoError(t, os.WriteFile(path.Join(source, "page.tsx"), []byte("export default 1"), 0o644))
-	afterSourceEdit, err := nodeDependencyCacheKey(source)
+	afterSourceEdit, err := nodeDependencyCacheKey(source, "linux-arm64")
 	require.NoError(t, err)
 	require.Equal(t, first, afterSourceEdit)
 
 	require.NoError(t, os.WriteFile(path.Join(source, "package-lock.json"), []byte(`{"lockfileVersion":3,"changed":true}`), 0o644))
-	afterLockEdit, err := nodeDependencyCacheKey(source)
+	afterLockEdit, err := nodeDependencyCacheKey(source, "linux-arm64")
 	require.NoError(t, err)
 	require.NotEqual(t, first, afterLockEdit)
+
+	otherPlatform, err := nodeDependencyCacheKey(source, "linux-amd64")
+	require.NoError(t, err)
+	require.NotEqual(t, afterLockEdit, otherPlatform)
+}
+
+func TestNodeDependencyCacheKeyRequiresExecutionPlatform(t *testing.T) {
+	source := t.TempDir()
+	require.NoError(t, os.WriteFile(path.Join(source, "package.json"), []byte(`{"name":"frontend"}`), 0o644))
+
+	_, err := nodeDependencyCacheKey(source, "")
+	require.ErrorContains(t, err, "execution platform is required")
 }
 
 func TestExecutionProfilesAreExplicitOutsideLocal(t *testing.T) {
