@@ -156,6 +156,11 @@ func TestNodeDependencyCacheKeyRequiresExecutionPlatform(t *testing.T) {
 	require.ErrorContains(t, err, "execution platform is required")
 }
 
+func TestRuntimeImagePinsMultiArchitectureCompanion(t *testing.T) {
+	require.Equal(t, "codeflydev/node", runtimeImage.Name)
+	require.Equal(t, "0.0.13", runtimeImage.Tag)
+}
+
 func TestExecutionProfilesAreExplicitOutsideLocal(t *testing.T) {
 	settings := &Settings{Mode: "ssr"}
 

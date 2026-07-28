@@ -32,7 +32,7 @@ var agent = shared.Must(resources.LoadFromFs[resources.Agent](shared.Embed(infoF
 // settings (DockerImage field) but it's NOT recommended; the companion
 // image is the mode-consistent default and gets rebuilt + pinned on
 // every codefly release.
-var runtimeImage = &resources.DockerImage{Name: "codeflydev/node", Tag: "0.0.12"}
+var runtimeImage = &resources.DockerImage{Name: "codeflydev/node", Tag: "0.0.13"}
 
 var requirements = builders.NewDependencies(agent.Name,
 	builders.NewDependency("service.codefly.yaml"),
