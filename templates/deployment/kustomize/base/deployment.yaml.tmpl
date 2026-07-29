@@ -45,8 +45,22 @@ spec:
           envFrom:
             - configMapRef:
                 name: {{.Name}}-config
+{{- if not .GitOps }}
             - secretRef:
                 name: {{.Name}}-secret
+{{- else }}
+{{- with .SecretReferences }}
+          env:
+{{- range $environmentVariable, $reference := . }}
+            - name: {{ $environmentVariable }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $reference.Name }}
+                  key: {{ $reference.Key }}
+                  optional: {{ $reference.Optional }}
+{{- end }}
+{{- end }}
+{{- end }}
           resources:
             requests:
               cpu: 100m
