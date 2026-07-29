@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -19,6 +20,13 @@ func TestDeploymentTemplates(t *testing.T) {
 }
 
 func TestDeployProfiles(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("test fixture uses a POSIX shell")
+	}
+	binDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(binDir, "kubectl"), []byte("#!/bin/sh\ncat >/dev/null\n"), 0o755))
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
 	ctx := context.Background()
 	identity, environment := testIdentity(t, t.TempDir())
 	builder := NewBuilder(NewService())
@@ -31,12 +39,18 @@ func TestDeployProfiles(t *testing.T) {
 	require.NoError(t, err)
 
 	tests := []struct {
+		name                    string
 		profile                 builderv0.KubernetesOutputProfile
+		validateServerSide      bool
+		serverSideValidation    builderv0.KubernetesManifestValidation_Status
+		promotable              bool
 		secretReferences        map[string]*builderv0.KubernetesSecretKeyReference
 		dependencyConfiguration []*basev0.Configuration
 	}{
 		{
-			profile: builderv0.KubernetesOutputProfile_KUBERNETES_OUTPUT_PROFILE_EPHEMERAL_LOCAL_APPLY_V1,
+			name:                 "ephemeral local apply",
+			profile:              builderv0.KubernetesOutputProfile_KUBERNETES_OUTPUT_PROFILE_EPHEMERAL_LOCAL_APPLY_V1,
+			serverSideValidation: builderv0.KubernetesManifestValidation_STATUS_NOT_RUN,
 			dependencyConfiguration: []*basev0.Configuration{{
 				Origin: "module/dependency",
 				Infos: []*basev0.ConfigurationInformation{{
@@ -50,7 +64,11 @@ func TestDeployProfiles(t *testing.T) {
 			}},
 		},
 		{
-			profile: builderv0.KubernetesOutputProfile_KUBERNETES_OUTPUT_PROFILE_PROMOTABLE_GITOPS_V1,
+			name:                 "promotable GitOps",
+			profile:              builderv0.KubernetesOutputProfile_KUBERNETES_OUTPUT_PROFILE_PROMOTABLE_GITOPS_V1,
+			validateServerSide:   true,
+			serverSideValidation: builderv0.KubernetesManifestValidation_STATUS_PASSED,
+			promotable:           true,
 			secretReferences: map[string]*builderv0.KubernetesSecretKeyReference{
 				"CODEFLY_TEST_SECRET": {
 					Name:     "external-secret",
@@ -59,9 +77,16 @@ func TestDeployProfiles(t *testing.T) {
 				},
 			},
 		},
+		{
+			name:                 "promotable GitOps without secret references",
+			profile:              builderv0.KubernetesOutputProfile_KUBERNETES_OUTPUT_PROFILE_PROMOTABLE_GITOPS_V1,
+			validateServerSide:   true,
+			serverSideValidation: builderv0.KubernetesManifestValidation_STATUS_PASSED,
+			promotable:           true,
+		},
 	}
 	for _, test := range tests {
-		t.Run(test.profile.String(), func(t *testing.T) {
+		t.Run(test.name, func(t *testing.T) {
 			destination := t.TempDir()
 			response, err := builder.Deploy(ctx, &builderv0.DeploymentRequest{
 				Environment:                environmentProto,
@@ -75,17 +100,21 @@ func TestDeployProfiles(t *testing.T) {
 								DockerRepository: "registry.example.com",
 								ImageDigest:      "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 							},
-							Profile:          test.profile,
-							SecretReferences: test.secretReferences,
+							Profile:            test.profile,
+							ValidateServerSide: test.validateServerSide,
+							SecretReferences:   test.secretReferences,
 						},
 					},
 				},
 			})
 			require.NoError(t, err)
+			require.Equal(t, builderv0.DeploymentStatus_SUCCESS, response.GetState().GetState())
 			output := response.GetDeployment().GetKubernetes()
 			require.Equal(t, test.profile, output.GetProfile())
 			require.Equal(t, services.KubernetesManifestContractVersion, output.GetContractVersion())
 			require.Equal(t, builderv0.KubernetesManifestValidation_STATUS_PASSED, output.GetValidation().GetStaticValidation())
+			require.Equal(t, test.serverSideValidation, output.GetValidation().GetServerSideValidation())
+			require.Equal(t, test.promotable, output.GetValidation().GetPromotable())
 
 			deployment := readDeploymentFile(t, destination, "base", "deployment.yaml")
 			if test.profile == builderv0.KubernetesOutputProfile_KUBERNETES_OUTPUT_PROFILE_EPHEMERAL_LOCAL_APPLY_V1 {
@@ -106,11 +135,16 @@ func TestDeployProfiles(t *testing.T) {
 			require.NotContains(t, readDeploymentFile(t, destination, "base", "kustomization.yaml"), "namespace.yaml")
 			require.NotContains(t, readDeploymentFile(t, destination, "overlays", environment.Name, "kustomization.yaml"), "secret.yaml")
 			require.Contains(t, deployment, "image: registry.example.com/mod/frontend@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
-			require.Contains(t, deployment, "name: CODEFLY_TEST_SECRET")
-			require.Contains(t, deployment, "name: external-secret")
-			require.Contains(t, deployment, "key: password")
-			require.Contains(t, deployment, "optional: true")
 			require.NotContains(t, deployment, "name: frontend-secret")
+			if len(test.secretReferences) == 0 {
+				require.NotContains(t, deployment, "\n          env:\n")
+				require.NotContains(t, deployment, "secretKeyRef:")
+			} else {
+				require.Contains(t, deployment, "name: CODEFLY_TEST_SECRET")
+				require.Contains(t, deployment, "name: external-secret")
+				require.Contains(t, deployment, "key: password")
+				require.Contains(t, deployment, "optional: true")
+			}
 
 			require.NoError(t, filepath.WalkDir(destination, func(path string, entry os.DirEntry, err error) error {
 				if err != nil || entry.IsDir() {
