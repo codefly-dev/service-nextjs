@@ -43,7 +43,7 @@ func TestDeployProfiles(t *testing.T) {
 		profile                 builderv0.KubernetesOutputProfile
 		validateServerSide      bool
 		serverSideValidation    builderv0.KubernetesManifestValidation_Status
-		promotable              bool
+		restricted              bool
 		secretReferences        map[string]*builderv0.KubernetesSecretKeyReference
 		dependencyConfiguration []*basev0.Configuration
 	}{
@@ -64,11 +64,11 @@ func TestDeployProfiles(t *testing.T) {
 			}},
 		},
 		{
-			name:                 "promotable GitOps",
-			profile:              builderv0.KubernetesOutputProfile_KUBERNETES_OUTPUT_PROFILE_PROMOTABLE_GITOPS_V1,
+			name:                 "restricted portable",
+			profile:              builderv0.KubernetesOutputProfile_KUBERNETES_OUTPUT_PROFILE_RESTRICTED_PORTABLE_V1,
 			validateServerSide:   true,
 			serverSideValidation: builderv0.KubernetesManifestValidation_STATUS_PASSED,
-			promotable:           true,
+			restricted:           true,
 			secretReferences: map[string]*builderv0.KubernetesSecretKeyReference{
 				"CODEFLY_TEST_SECRET": {
 					Name:     "external-secret",
@@ -78,11 +78,11 @@ func TestDeployProfiles(t *testing.T) {
 			},
 		},
 		{
-			name:                 "promotable GitOps without secret references",
-			profile:              builderv0.KubernetesOutputProfile_KUBERNETES_OUTPUT_PROFILE_PROMOTABLE_GITOPS_V1,
+			name:                 "restricted portable without secret references",
+			profile:              builderv0.KubernetesOutputProfile_KUBERNETES_OUTPUT_PROFILE_RESTRICTED_PORTABLE_V1,
 			validateServerSide:   true,
 			serverSideValidation: builderv0.KubernetesManifestValidation_STATUS_PASSED,
-			promotable:           true,
+			restricted:           true,
 		},
 	}
 	for _, test := range tests {
@@ -116,7 +116,7 @@ func TestDeployProfiles(t *testing.T) {
 			require.Equal(t, services.KubernetesManifestContractVersion, output.GetContractVersion())
 			require.Equal(t, builderv0.KubernetesManifestValidation_STATUS_PASSED, output.GetValidation().GetStaticValidation())
 			require.Equal(t, test.serverSideValidation, output.GetValidation().GetServerSideValidation())
-			require.Equal(t, test.promotable, output.GetValidation().GetPromotable())
+			require.Equal(t, test.restricted, output.GetValidation().GetRestricted())
 
 			deployment := readDeploymentFile(t, destination, "base", "deployment.yaml")
 			if test.profile == builderv0.KubernetesOutputProfile_KUBERNETES_OUTPUT_PROFILE_EPHEMERAL_LOCAL_APPLY_V1 {
