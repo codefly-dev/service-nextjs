@@ -839,7 +839,11 @@ func (s *Runtime) Test(ctx context.Context, req *runtimev0.TestRequest) (*runtim
 		resp, responseErr := s.Runtime.TestResponseWithResults(run, passed, failed, skipped, 0, failures, runErr)
 		resp.Output = "composite npm test script: aggregate counts parsed from console output; per-case JSON was unavailable"
 		s.Wool.Forwardf("Tests: %d passed, %d failed, %d skipped", passed, failed, skipped)
-		return resp, responseErr
+		// A completed test run communicates failures in its structured
+		// response. Returning a non-nil RPC error alongside that response makes
+		// gRPC discard every case and assertion detail; the Codefly caller owns
+		// translating TestSucceeded(response) into a non-zero command exit.
+		return completedTestRPCResult(resp, responseErr)
 	}
 	var run *javascript.StructuredTestRun
 	switch runnerKind {
@@ -856,7 +860,20 @@ func (s *Runtime) Test(ctx context.Context, req *runtimev0.TestRequest) (*runtim
 	}
 
 	s.Wool.Forwardf("Tests: %s", run.LegacyTestSummary().SummaryLine())
-	return run.ToProtoResponse(runnerKind, req.Suite, duration), runErr
+	return completedTestRPCResult(
+		run.ToProtoResponse(runnerKind, req.Suite, duration),
+		runErr,
+	)
+}
+
+func completedTestRPCResult(
+	response *runtimev0.TestResponse,
+	executionErr error,
+) (*runtimev0.TestResponse, error) {
+	if response == nil {
+		return nil, executionErr
+	}
+	return response, nil
 }
 
 // Lint owns the JavaScript/TypeScript static-lint phase for every service made
