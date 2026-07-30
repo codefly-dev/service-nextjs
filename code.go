@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -106,6 +107,9 @@ func (c *Code) fixTypeScript(ctx context.Context, input corecode.FixInput) (core
 		if runErr != nil && len(fixed) == 0 {
 			return corecode.FixResult{}, fmt.Errorf("biome check: %w: %s", runErr, strings.TrimSpace(string(diagnostics)))
 		}
+		if err := rejectEmptySourceFix("biome", input.Content, fixed); err != nil {
+			return corecode.FixResult{}, err
+		}
 		return corecode.FixResult{
 			Content: fixed,
 			Actions: []string{"biome check --write"},
@@ -135,6 +139,9 @@ func (c *Code) fixTypeScript(ctx context.Context, input corecode.FixInput) (core
 		if runErr != nil {
 			return corecode.FixResult{}, fmt.Errorf("prettier: %w: %s", runErr, strings.TrimSpace(string(diagnostics)))
 		}
+		if err := rejectEmptySourceFix("prettier", fixed, formatted); err != nil {
+			return corecode.FixResult{}, err
+		}
 		fixed = formatted
 		actions = append(actions, "prettier")
 		if text := strings.TrimSpace(string(diagnostics)); text != "" {
@@ -145,6 +152,17 @@ func (c *Code) fixTypeScript(ctx context.Context, input corecode.FixInput) (core
 		return corecode.FixResult{}, fmt.Errorf("no project-local Biome, ESLint, or Prettier fixer is configured")
 	}
 	return corecode.FixResult{Content: fixed, Actions: actions, Output: strings.Join(output, "\n")}, nil
+}
+
+// A formatter/linter is never allowed to turn a substantive source file into
+// an empty file. This invariant is deliberately independent of process exit
+// status: a broken stdin/stdout integration can exit successfully with no
+// output, which must fail closed instead of being reported as a valid fix.
+func rejectEmptySourceFix(tool string, original, fixed []byte) error {
+	if len(bytes.TrimSpace(original)) > 0 && len(bytes.TrimSpace(fixed)) == 0 {
+		return fmt.Errorf("%s returned empty output for a non-empty source file; refusing destructive fix", tool)
+	}
+	return nil
 }
 
 func (c *Code) readNodePackageManifest() (*nodePackageManifest, error) {
@@ -179,6 +197,9 @@ func parseESLintFix(data, original []byte) (eslintFix, error) {
 	result := eslintFix{Content: original}
 	if results[0].Output != nil {
 		result.Content = []byte(*results[0].Output)
+	}
+	if err := rejectEmptySourceFix("eslint", original, result.Content); err != nil {
+		return eslintFix{}, err
 	}
 	for _, message := range results[0].Messages {
 		rule := "eslint"

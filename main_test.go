@@ -39,10 +39,11 @@ func TestAgentInformationAdvertisesValidationContract(t *testing.T) {
 	testField := validation.Descriptor().Fields().ByName("test")
 	testValidation := validation.Get(testField).Message()
 	suitesField := testValidation.Descriptor().Fields().ByName("suites")
-	require.Equal(t, 1, testValidation.Get(suitesField).List().Len())
-	suite := testValidation.Get(suitesField).List().Get(0).Message()
-	require.Equal(t, "unit", suite.Get(suite.Descriptor().Fields().ByName("name")).String())
-	require.True(t, suite.Get(suite.Descriptor().Fields().ByName("default_suite")).Bool())
+	suites := testValidation.Get(suitesField).List()
+	require.Equal(t, 5, suites.Len())
+	unit := suites.Get(0).Message()
+	require.Equal(t, "unit", unit.Get(unit.Descriptor().Fields().ByName("name")).String())
+	require.True(t, unit.Get(unit.Descriptor().Fields().ByName("default_suite")).Bool())
 }
 
 func testIdentity(t *testing.T, tmpDir string) (*basev0.ServiceIdentity, *resources.Environment) {

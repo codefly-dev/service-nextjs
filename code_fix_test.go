@@ -58,3 +58,56 @@ func TestNextFixerUsesProjectLocalESLintWithoutWritingOnDryRun(t *testing.T) {
 		t.Fatalf("dry-run changed source: %q", written)
 	}
 }
+
+func TestNextFixerRejectsSuccessfulEmptyBiomeOutput(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("test fixture uses a POSIX shell")
+	}
+	dir := t.TempDir()
+	binDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "package.json"), []byte(`{"devDependencies":{"@biomejs/biome":"^2"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	original := "export const value = 1;\n"
+	if err := os.WriteFile(filepath.Join(dir, "sample.ts"), []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Reproduces the dangerous boundary condition: the tool consumes stdin,
+	// exits successfully, and writes no stdout.
+	fakeNPM := "#!/bin/sh\ncat >/dev/null\nexit 0\n"
+	if err := os.WriteFile(filepath.Join(binDir, "npm"), []byte(fakeNPM), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	svc := NewService()
+	svc.sourceLocation = dir
+	server := NewCode(svc)
+	response, err := server.Execute(context.Background(), &codev0.CodeRequest{Operation: &codev0.CodeRequest_Fix{Fix: &codev0.FixRequest{
+		File: "sample.ts", DryRun: true,
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fix := response.GetFix(); fix != nil && fix.GetSuccess() {
+		t.Fatalf("empty output was accepted: %+v", fix)
+	}
+	if failure := response.GetFailure(); failure == nil || !strings.Contains(failure.GetMessage(), "refusing destructive fix") {
+		t.Fatalf("failure = %+v", failure)
+	}
+	written, _ := os.ReadFile(filepath.Join(dir, "sample.ts"))
+	if string(written) != original {
+		t.Fatalf("failed fix changed source: %q", written)
+	}
+}
+
+func TestRejectEmptySourceFixAllowsEmptyAndNonEmptyTransitions(t *testing.T) {
+	if err := rejectEmptySourceFix("test", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := rejectEmptySourceFix("test", []byte("source"), []byte("fixed")); err != nil {
+		t.Fatal(err)
+	}
+	if err := rejectEmptySourceFix("test", []byte("source"), []byte(" \n")); err == nil {
+		t.Fatal("non-empty source to whitespace output was accepted")
+	}
+}
