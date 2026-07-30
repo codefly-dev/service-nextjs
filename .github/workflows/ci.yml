@@ -13,3 +13,6 @@ concurrency:
 jobs:
   ci:
     uses: codefly-dev/core/.github/workflows/go-service-ci.yml@main
+
+  manifest-guard:
+    uses: codefly-dev/.github/.github/workflows/plugin-manifest-guard.yml@main
