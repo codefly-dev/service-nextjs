@@ -125,6 +125,45 @@ func TestInitAppliesRequestedRuntimeContextBeforeNetworkValidation(t *testing.T)
 	require.Equal(t, resources.RuntimeContextContainer, runtime.Runtime.RuntimeContext.Kind)
 }
 
+func TestSourceOnlyNodeRuntimeInitializesWithoutHTTPEndpoint(t *testing.T) {
+	ctx := context.Background()
+	tmpDir := t.TempDir()
+	identity, environment := testIdentity(t, tmpDir)
+	source := path.Join(tmpDir, "mod", "frontend", "code")
+	require.NoError(t, os.MkdirAll(source, 0o755))
+	require.NoError(t, os.WriteFile(
+		path.Join(source, "package.json"),
+		[]byte(`{"name":"source-only-node","private":true}`),
+		0o644,
+	))
+
+	runtime := NewRuntime(NewService())
+	environmentProto, err := environment.Proto()
+	require.NoError(t, err)
+	_, err = runtime.Load(ctx, &runtimev0.LoadRequest{
+		Identity:     identity,
+		Environment:  environmentProto,
+		DisableCatch: true,
+	})
+	require.NoError(t, err)
+	require.Nil(t, runtime.HttpEndpoint)
+	require.Equal(t, nodeProjectGeneric, runtime.projectKind)
+
+	response, err := runtime.Init(ctx, &runtimev0.InitRequest{
+		RuntimeContext: resources.NewRuntimeContextNative(),
+	})
+	require.NoError(t, err, "runtime failures are returned in the typed init status")
+	require.Equal(t, runtimev0.InitStatus_READY, response.GetStatus().GetState())
+
+	start, err := runtime.Start(ctx, &runtimev0.StartRequest{})
+	require.NoError(t, err, "runtime failures are returned in the typed start status")
+	require.Equal(t, runtimev0.StartStatus_ERROR, start.GetStatus().GetState())
+	require.Contains(t, start.GetStatus().GetMessage(), "requires an HTTP endpoint")
+
+	_, err = runtime.Destroy(ctx, &runtimev0.DestroyRequest{})
+	require.NoError(t, err)
+}
+
 func TestNodeDependencyCacheKeyTracksDependencyInputsOnly(t *testing.T) {
 	source := t.TempDir()
 	require.NoError(t, os.WriteFile(path.Join(source, "package.json"), []byte(`{"name":"frontend"}`), 0o644))

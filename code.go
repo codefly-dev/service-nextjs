@@ -76,6 +76,18 @@ type nodePackageManifest struct {
 	DevDependencies map[string]string `json:"devDependencies"`
 }
 
+type nodeProjectKind string
+type nodeTestRunner string
+
+const (
+	nodeProjectGeneric nodeProjectKind = "node"
+	nodeProjectNextJS  nodeProjectKind = "nextjs"
+	nodeTestGeneric    nodeTestRunner  = "npm"
+	nodeTestJest       nodeTestRunner  = "jest"
+	nodeTestPlaywright nodeTestRunner  = "playwright"
+	nodeTestVitest     nodeTestRunner  = "vitest"
+)
+
 type eslintJSONResult struct {
 	Output   *string `json:"output"`
 	Messages []struct {
@@ -166,7 +178,11 @@ func rejectEmptySourceFix(tool string, original, fixed []byte) error {
 }
 
 func (c *Code) readNodePackageManifest() (*nodePackageManifest, error) {
-	data, err := os.ReadFile(filepath.Join(c.sourceDir(), "package.json"))
+	return readNodePackageManifest(c.sourceDir())
+}
+
+func readNodePackageManifest(sourceDir string) (*nodePackageManifest, error) {
+	data, err := os.ReadFile(filepath.Join(sourceDir, "package.json"))
 	if err != nil {
 		return nil, fmt.Errorf("read package.json: %w", err)
 	}
@@ -179,6 +195,44 @@ func (c *Code) readNodePackageManifest() (*nodePackageManifest, error) {
 
 func (m *nodePackageManifest) hasDependency(name string) bool {
 	return m.Dependencies[name] != "" || m.DevDependencies[name] != ""
+}
+
+func (m *nodePackageManifest) projectKind() nodeProjectKind {
+	if m != nil && m.hasDependency("next") {
+		return nodeProjectNextJS
+	}
+	return nodeProjectGeneric
+}
+
+func (m *nodePackageManifest) hasScript(name string) bool {
+	return m != nil && strings.TrimSpace(m.Scripts[name]) != ""
+}
+
+func (m *nodePackageManifest) testRunner(scriptName string) nodeTestRunner {
+	if m == nil {
+		return nodeTestGeneric
+	}
+	command := strings.ToLower(m.Scripts[scriptName])
+	switch {
+	case strings.Contains(command, "playwright") || m.hasDependency("@playwright/test"):
+		return nodeTestPlaywright
+	case strings.Contains(command, "vitest") || m.hasDependency("vitest"):
+		return nodeTestVitest
+	case strings.Contains(command, "jest") || m.hasDependency("jest"):
+		return nodeTestJest
+	default:
+		return nodeTestGeneric
+	}
+}
+
+func (m *nodePackageManifest) validationScripts() []string {
+	var scripts []string
+	for _, name := range []string{"typecheck", "build"} {
+		if m.hasScript(name) {
+			scripts = append(scripts, name)
+		}
+	}
+	return scripts
 }
 
 type eslintFix struct {
