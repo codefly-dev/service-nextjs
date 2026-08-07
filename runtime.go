@@ -44,6 +44,8 @@ type Runtime struct {
 	dependenciesMu    sync.Mutex
 	executionProfile  NextExecutionProfile
 	readinessTimeout  time.Duration
+	packageManifest   *nodePackageManifest
+	projectKind       nodeProjectKind
 }
 
 func NewRuntime(service *Service) *Runtime {
@@ -128,17 +130,19 @@ func (s *Runtime) CreateRunnerEnvironment(ctx context.Context) error {
 			return s.Wool.Wrapf(err, "cannot create docker runner environment")
 		}
 		dockerEnv.WithWorkDir(s.sourceLocation)
-		// The source bind mount is intentionally shared so edits remain visible
-		// to Next.js. Its build/runtime state is not source: sharing `.next`
-		// between independently namespaced runs causes their dev-server locks,
-		// caches, and generated files to collide. Core owns and scopes the host
-		// cache path; this plugin only declares the mutable container target.
-		if _, err := dockerEnv.WithPersistentCacheMount(
-			ctx,
-			"next-build",
-			filepath.Join(s.sourceLocation, ".next"),
-		); err != nil {
-			return s.Wool.Wrapf(err, "cannot isolate Next.js runtime state")
+		if s.projectKind == nodeProjectNextJS {
+			// The source bind mount is intentionally shared so edits remain visible
+			// to Next.js. Its build/runtime state is not source: sharing `.next`
+			// between independently namespaced runs causes their dev-server locks,
+			// caches, and generated files to collide. Core owns and scopes the host
+			// cache path; this plugin only declares the mutable container target.
+			if _, err := dockerEnv.WithPersistentCacheMount(
+				ctx,
+				"next-build",
+				filepath.Join(s.sourceLocation, ".next"),
+			); err != nil {
+				return s.Wool.Wrapf(err, "cannot isolate Next.js runtime state")
+			}
 		}
 		// Lockfiles do not fully identify node_modules: optional native
 		// packages such as esbuild and lightningcss are selected for the
@@ -207,24 +211,40 @@ func (s *Runtime) Load(ctx context.Context, req *runtimev0.LoadRequest) (*runtim
 	}
 
 	s.Runtime.SetEnvironment(req.Environment)
-	s.executionProfile, err = s.Settings.ExecutionProfileFor(req.GetEnvironment().GetName())
-	if err != nil {
-		return s.Runtime.LoadErrorf(err, "resolving Next.js execution profile")
-	}
-	s.readinessTimeout, err = s.Settings.ReadinessTimeoutFor(s.executionProfile)
-	if err != nil {
-		return s.Runtime.LoadErrorf(err, "resolving Next.js readiness timeout")
-	}
-	s.Wool.Info(
-		"resolved Next.js execution profile",
-		wool.Field("environment", req.GetEnvironment().GetName()),
-		wool.Field("profile", s.executionProfile),
-		wool.Field("readiness_timeout", s.readinessTimeout),
-	)
-
 	s.sourceLocation, err = s.LocalDirCreate(ctx, "%s", s.Settings.NodeSourceDir())
 	if err != nil {
 		return s.Runtime.LoadErrorf(err, "creating source location")
+	}
+	s.packageManifest, err = readNodePackageManifest(s.sourceLocation)
+	if err != nil {
+		return s.Runtime.LoadErrorf(err, "loading Node.js package manifest")
+	}
+	s.projectKind = s.packageManifest.projectKind()
+	if s.projectKind == nodeProjectNextJS {
+		s.executionProfile, err = s.Settings.ExecutionProfileFor(req.GetEnvironment().GetName())
+		if err != nil {
+			return s.Runtime.LoadErrorf(err, "resolving Next.js execution profile")
+		}
+		s.readinessTimeout, err = s.Settings.ReadinessTimeoutFor(s.executionProfile)
+		if err != nil {
+			return s.Runtime.LoadErrorf(err, "resolving Next.js readiness timeout")
+		}
+		s.Wool.Info(
+			"resolved Next.js execution profile",
+			wool.Field("environment", req.GetEnvironment().GetName()),
+			wool.Field("profile", s.executionProfile),
+			wool.Field("readiness_timeout", s.readinessTimeout),
+		)
+	} else {
+		// Generic Node.js packages use this agent for typed Code/Runtime
+		// capabilities, but have no Next.js server lifecycle to configure.
+		s.executionProfile = NextExecutionDevelopment
+		s.readinessTimeout = developmentReadinessTimeout
+		s.Wool.Info(
+			"resolved generic Node.js execution profile",
+			wool.Field("environment", req.GetEnvironment().GetName()),
+			wool.Field("profile", s.projectKind),
+		)
 	}
 
 	requirements.Localize(s.Location)
@@ -274,40 +294,42 @@ func (s *Runtime) Init(ctx context.Context, req *runtimev0.InitRequest) (*runtim
 
 	s.NetworkMappings = req.ProposedNetworkMappings
 
-	// Networking
-	net, err := resources.FindNetworkInstanceInNetworkMappings(ctx, s.NetworkMappings, s.HttpEndpoint, resources.NewNativeNetworkAccess())
-	if err != nil {
-		return s.Runtime.InitError(err)
-	}
+	// Source-only Node.js/TypeScript packages legitimately expose no HTTP
+	// endpoint. Their typed test/build/lint capabilities still need a fully
+	// initialized runner; the application Start boundary below remains
+	// responsible for rejecting an absent endpoint.
+	if s.HttpEndpoint != nil {
+		net, err := resources.FindNetworkInstanceInNetworkMappings(ctx, s.NetworkMappings, s.HttpEndpoint, resources.NewNativeNetworkAccess())
+		if err != nil {
+			return s.Runtime.InitError(err)
+		}
 
-	s.Infof("HTTP will run on %s", net.Address)
+		s.Infof("HTTP will run on %s", net.Address)
 
-	nm, err := resources.FindNetworkMapping(ctx, s.NetworkMappings, s.HttpEndpoint)
-	if err != nil {
-		return s.Runtime.InitError(err)
-	}
-	// A (nil, no-error) mapping must fail gracefully, never be wrapped into a
-	// `[]{nil}` that derefs downstream (an agent must never panic).
-	if nm == nil {
-		return s.Runtime.InitError(fmt.Errorf("no network mapping resolved for the http endpoint"))
-	}
-	err = s.EnvironmentVariables.AddEndpoints(ctx, []*basev0.NetworkMapping{nm}, resources.NewNativeNetworkAccess())
-	if err != nil {
-		return s.Runtime.InitError(err)
+		nm, err := resources.FindNetworkMapping(ctx, s.NetworkMappings, s.HttpEndpoint)
+		if err != nil {
+			return s.Runtime.InitError(err)
+		}
+		// A (nil, no-error) mapping must fail gracefully, never be wrapped into a
+		// `[]{nil}` that derefs downstream (an agent must never panic).
+		if nm == nil {
+			return s.Runtime.InitError(fmt.Errorf("no network mapping resolved for the http endpoint"))
+		}
+		if err := s.EnvironmentVariables.AddEndpoints(ctx, []*basev0.NetworkMapping{nm}, resources.NewNativeNetworkAccess()); err != nil {
+			return s.Runtime.InitError(err)
+		}
 	}
 
 	// Workspace configurations (e.g. WorkOS API keys). Drop nil entries before the
 	// env-var assembly — a nil from upstream must never panic the agent.
 	s.workspaceConfigs = dropNilConfigs(req.WorkspaceConfigurations)
-	err = s.EnvironmentVariables.AddConfigurations(ctx, s.workspaceConfigs...)
-	if err != nil {
+	if err := s.EnvironmentVariables.AddConfigurations(ctx, s.workspaceConfigs...); err != nil {
 		return s.Runtime.InitError(err)
 	}
 
 	// Dependencies configurations (from saas/api & friends) — same nil discipline.
 	confs := resources.FilterConfigurations(dropNilConfigs(req.DependenciesConfigurations), resources.NewRuntimeContextNative())
-	err = s.EnvironmentVariables.AddConfigurations(ctx, confs...)
-	if err != nil {
+	if err := s.EnvironmentVariables.AddConfigurations(ctx, confs...); err != nil {
 		return s.Runtime.InitError(err)
 	}
 
@@ -333,8 +355,7 @@ func (s *Runtime) Init(ctx context.Context, req *runtimev0.InitRequest) (*runtim
 		dependencies := requirements.Clone()
 		dependencies.Localize(s.Location)
 		conf := services.NewWatchConfiguration(dependencies)
-		err = s.SetupWatcher(ctx, conf, s.EventHandler)
-		if err != nil {
+		if err := s.SetupWatcher(ctx, conf, s.EventHandler); err != nil {
 			s.Wool.Warn("error in watcher", wool.ErrField(err))
 		}
 	}
@@ -345,6 +366,9 @@ func (s *Runtime) Init(ctx context.Context, req *runtimev0.InitRequest) (*runtim
 func (s *Runtime) Start(ctx context.Context, req *runtimev0.StartRequest) (*runtimev0.StartResponse, error) {
 	defer s.Wool.Catch()
 	ctx = s.Wool.Inject(ctx)
+	if s.HttpEndpoint == nil {
+		return s.Runtime.StartError(fmt.Errorf("Node.js application start requires an HTTP endpoint"))
+	}
 
 	s.Wool.Forwardf(
 		"starting Next.js %s server (%s mode)...",
@@ -720,29 +744,39 @@ func (s *Runtime) Destroy(ctx context.Context, req *runtimev0.DestroyRequest) (*
 func (s *Runtime) Test(ctx context.Context, req *runtimev0.TestRequest) (*runtimev0.TestResponse, error) {
 	defer s.Wool.Catch()
 	ctx = s.Wool.Inject(ctx)
+	if req == nil {
+		req = &runtimev0.TestRequest{}
+	}
 
-	// Map suite → npm script + runner kind. Default = "test" (vitest
-	// unit tests). "e2e" expects a "test:e2e" script wired to
-	// Playwright in package.json.
+	// Map suite to the package-owned npm script, then derive the runner from
+	// package.json. Source workspaces route every Node/TypeScript code unit
+	// through this plugin; assuming every package is Next.js + Vitest corrupts
+	// otherwise valid Jest, Playwright, and composite npm test commands.
 	npmScript := "test"
-	runnerKind := "vitest"
 	switch req.Suite {
 	case "", "unit":
 		npmScript = "test"
-		runnerKind = "vitest"
 	case "e2e":
 		npmScript = "test:e2e"
-		runnerKind = "playwright"
 	case "integration":
 		npmScript = "test:integration"
-		runnerKind = "vitest"
 	case "smoke":
 		npmScript = "test:smoke"
-		runnerKind = "vitest"
 	default:
 		npmScript = "test:" + req.Suite
-		runnerKind = "vitest"
 	}
+	manifest := s.packageManifest
+	if manifest == nil {
+		var err error
+		manifest, err = readNodePackageManifest(s.sourceLocation)
+		if err != nil {
+			return s.Runtime.TestErrorf(err, "loading Node.js package manifest")
+		}
+	}
+	if !manifest.hasScript(npmScript) {
+		return s.Runtime.TestErrorf(fmt.Errorf("package.json has no %q script", npmScript), "selecting Node.js test script")
+	}
+	runnerKind := manifest.testRunner(npmScript)
 
 	// Allocate a JSON output file under the project's .codefly cache.
 	// Both vitest and playwright support writing JSON to disk via a
@@ -755,28 +789,24 @@ func (s *Runtime) Test(ctx context.Context, req *runtimev0.TestRequest) (*runtim
 	jsonFile := filepath.Join(cacheDir, fmt.Sprintf("test-%d.json", time.Now().UnixNano()))
 	defer os.Remove(jsonFile)
 
-	// Args before `--` go to npm; args after go to the test runner.
-	args := []string{"run", npmScript, "--"}
-
-	// Reporter + output file. Playwright's flag is --output, not
-	// --outputFile (jest/vitest convention). We thread JSON to disk
-	// and parse from there.
-	args = append(args, "--reporter=json")
+	var runnerArgs []string
 	switch runnerKind {
-	case "playwright":
-		args = append(args, "--output="+jsonFile)
-	default:
-		args = append(args, "--outputFile="+jsonFile)
+	case nodeTestPlaywright:
+		runnerArgs = append(runnerArgs, "--reporter=json", "--output="+jsonFile)
+	case nodeTestVitest:
+		runnerArgs = append(runnerArgs, "--reporter=json", "--outputFile="+jsonFile)
+	case nodeTestJest:
+		runnerArgs = append(runnerArgs, "--json", "--outputFile="+jsonFile)
 	}
 
-	// Filter pattern. Vitest uses --testNamePattern (regex),
-	// Playwright uses --grep.
 	if pat := combineRegex(req.Filters); pat != "" {
 		switch runnerKind {
-		case "playwright":
-			args = append(args, "--grep", pat)
+		case nodeTestPlaywright:
+			runnerArgs = append(runnerArgs, "--grep", pat)
+		case nodeTestVitest, nodeTestJest:
+			runnerArgs = append(runnerArgs, "--testNamePattern", pat)
 		default:
-			args = append(args, "--testNamePattern", pat)
+			return s.Runtime.TestErrorf(fmt.Errorf("test script %q has no recognized runner", npmScript), "cannot apply typed test filters")
 		}
 	}
 
@@ -784,20 +814,30 @@ func (s *Runtime) Test(ctx context.Context, req *runtimev0.TestRequest) (*runtim
 	// filters are not supplied (older clients).
 	if req.Target != "" && len(req.Filters) == 0 {
 		switch runnerKind {
-		case "playwright":
-			args = append(args, "--grep", req.Target)
+		case nodeTestPlaywright:
+			runnerArgs = append(runnerArgs, "--grep", req.Target)
+		case nodeTestVitest, nodeTestJest:
+			runnerArgs = append(runnerArgs, "--testNamePattern", req.Target)
 		default:
-			args = append(args, "--testNamePattern", req.Target)
+			return s.Runtime.TestErrorf(fmt.Errorf("test script %q has no recognized runner", npmScript), "cannot apply typed test target")
 		}
 	}
 
 	if req.Coverage {
-		args = append(args, "--coverage")
+		if runnerKind == nodeTestGeneric {
+			return s.Runtime.TestErrorf(fmt.Errorf("test script %q has no recognized runner", npmScript), "cannot apply typed coverage")
+		}
+		runnerArgs = append(runnerArgs, "--coverage")
 	}
 
-	args = append(args, req.ExtraArgs...)
+	runnerArgs = append(runnerArgs, req.ExtraArgs...)
+	args := []string{"run", npmScript}
+	if len(runnerArgs) > 0 {
+		args = append(args, "--")
+		args = append(args, runnerArgs...)
+	}
 
-	s.Wool.Info("running frontend tests",
+	s.Wool.Info("running Node.js tests",
 		wool.Field("suite", req.Suite),
 		wool.Field("runner", runnerKind),
 		wool.Field("script", npmScript),
@@ -847,7 +887,7 @@ func (s *Runtime) Test(ctx context.Context, req *runtimev0.TestRequest) (*runtim
 	}
 	var run *javascript.StructuredTestRun
 	switch runnerKind {
-	case "playwright":
+	case nodeTestPlaywright:
 		run = javascript.ParsePlaywrightJSON(string(jsonBytes))
 	default:
 		run = javascript.ParseJestVitestJSON(string(jsonBytes), 0)
@@ -861,7 +901,7 @@ func (s *Runtime) Test(ctx context.Context, req *runtimev0.TestRequest) (*runtim
 
 	s.Wool.Forwardf("Tests: %s", run.LegacyTestSummary().SummaryLine())
 	return completedTestRPCResult(
-		run.ToProtoResponse(runnerKind, req.Suite, duration),
+		run.ToProtoResponse(string(runnerKind), req.Suite, duration),
 		runErr,
 	)
 }
@@ -904,8 +944,25 @@ func (s *Runtime) Build(ctx context.Context, _ *runtimev0.BuildRequest) (*runtim
 	defer s.Wool.Catch()
 	ctx = s.Wool.Inject(ctx)
 
+	manifest := s.packageManifest
+	if manifest == nil {
+		var err error
+		manifest, err = readNodePackageManifest(s.sourceLocation)
+		if err != nil {
+			return s.Runtime.BuildErrorf(err, "loading Node.js package manifest")
+		}
+	}
+	scripts := manifest.validationScripts()
+	if len(scripts) == 0 {
+		return s.Runtime.BuildErrorf(
+			fmt.Errorf("package.json declares neither a typecheck nor build script"),
+			"selecting Node.js compile checks",
+		)
+	}
+
 	var outputs []string
-	for _, args := range [][]string{{"run", "typecheck"}, {"run", "build"}} {
+	for _, script := range scripts {
+		args := []string{"run", script}
 		output, err := s.runNPM(ctx, args...)
 		compressed := llmout.Compress("npm", args, output)
 		outputs = append(outputs, compressed)
@@ -929,7 +986,7 @@ func (s *Runtime) ensureNodeDependencies(ctx context.Context) error {
 	if _, err := os.Stat(filepath.Join(s.sourceLocation, "package-lock.json")); err == nil {
 		args = []string{"ci"}
 	}
-	s.Wool.Info("installing frontend dependencies", wool.Field("command", "npm "+strings.Join(args, " ")))
+	s.Wool.Info("installing Node.js dependencies", wool.Field("command", "npm "+strings.Join(args, " ")))
 	proc, err := s.runnerEnvironment.NewProcess("npm", args...)
 	if err != nil {
 		return fmt.Errorf("create npm dependency process: %w", err)
@@ -953,7 +1010,7 @@ func (s *Runtime) nodeDependenciesPresent(ctx context.Context) bool {
 	proc, err := s.runnerEnvironment.NewProcess(
 		"node",
 		"-e",
-		"require.resolve('next/package.json')",
+		"const fs=require('fs'); process.exit(fs.existsSync('node_modules') ? 0 : 1)",
 	)
 	if err != nil {
 		return false
