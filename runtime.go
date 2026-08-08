@@ -350,13 +350,6 @@ func (s *Runtime) Init(ctx context.Context, req *runtimev0.InitRequest) (*runtim
 	if err := s.ensureNodeDependencies(ctx); err != nil {
 		return s.Runtime.InitError(err)
 	}
-	// Playwright intentionally ships browser binaries separately from its npm
-	// package. A fresh checkout is not runnable after npm install alone; let the
-	// plugin materialize those package-owned runtime assets idempotently inside
-	// the selected local/Nix/container environment.
-	if err := s.ensurePlaywrightBrowsers(ctx); err != nil {
-		return s.Runtime.InitError(err)
-	}
 
 	if s.Settings.HotReload && s.executionProfile == NextExecutionDevelopment {
 		dependencies := requirements.Clone()
@@ -842,11 +835,6 @@ func (s *Runtime) Test(ctx context.Context, req *runtimev0.TestRequest) (*runtim
 		wool.Field("script", npmScript),
 		wool.Field("args", args))
 
-	testProc, err := s.runnerEnvironment.NewProcess("npm", args...)
-	if err != nil {
-		return s.Runtime.TestErrorf(err, "cannot create test process")
-	}
-
 	testEnvs, err := s.EnvironmentVariables.All()
 	if err != nil {
 		return s.Runtime.TestErrorf(err, "getting environment variables")
@@ -854,20 +842,38 @@ func (s *Runtime) Test(ctx context.Context, req *runtimev0.TestRequest) (*runtim
 	// Reporter output is an agent-owned evidence path. Append it after project
 	// env so a stale user value cannot redirect or discard the current run.
 	testEnvs = append(testEnvs, reporterEnvs...)
-	testProc.WithEnvironmentVariables(ctx, testEnvs...)
-	var consoleOutput bytes.Buffer
-	testProc.WithOutput(io.MultiWriter(s.Logger, &consoleOutput))
-
 	started := time.Now()
-	runErr := testProc.Run(ctx)
+	attempt, err := s.runNodeTestAttempt(ctx, args, testEnvs, jsonFile)
+	if err != nil {
+		return s.Runtime.TestErrorf(err, "starting Node.js test runner")
+	}
+	var recoveryErr error
+	if runnerKind == nodeTestPlaywright && attempt.runErr != nil {
+		browsers := missingPlaywrightBrowsers(attempt.jsonBytes)
+		if len(browsers) > 0 {
+			s.Wool.Info("recovering missing Playwright browser assets",
+				wool.Field("browsers", browsers))
+			if err := s.installPlaywrightBrowsers(ctx, browsers); err != nil {
+				recoveryErr = err
+				s.Wool.Warn("automatic Playwright browser recovery failed", wool.ErrField(err))
+			} else {
+				attempt, err = s.runNodeTestAttempt(ctx, args, testEnvs, jsonFile)
+				if err != nil {
+					return s.Runtime.TestErrorf(err, "restarting Node.js test runner after Playwright recovery")
+				}
+			}
+		}
+	}
 	duration := time.Since(started)
+	runErr := attempt.runErr
+	consoleOutput := attempt.consoleOutput
+	jsonBytes := attempt.jsonBytes
 
 	// Read + parse the JSON regardless of runErr. A failed test run
 	// produces non-zero exit code AND a complete JSON file; the
 	// structured response carries the per-case detail.
-	jsonBytes, _ := os.ReadFile(jsonFile) //nolint:gosec // path under sourceDir
 	if len(bytes.TrimSpace(jsonBytes)) == 0 {
-		run, passed, failed, skipped := parseNPMTestOutput(consoleOutput.String())
+		run, passed, failed, skipped := parseNPMTestOutput(consoleOutput)
 		if run == 0 {
 			if runErr == nil {
 				runErr = fmt.Errorf("test script completed without machine-readable or parseable results")
@@ -902,10 +908,48 @@ func (s *Runtime) Test(ctx context.Context, req *runtimev0.TestRequest) (*runtim
 	}
 
 	s.Wool.Forwardf("Tests: %s", run.LegacyTestSummary().SummaryLine())
-	return completedTestRPCResult(
-		run.ToProtoResponse(string(runnerKind), req.Suite, duration),
-		runErr,
-	)
+	response := run.ToProtoResponse(string(runnerKind), req.Suite, duration)
+	if recoveryErr != nil {
+		response.Output = fmt.Sprintf("automatic Playwright browser recovery failed: %v", recoveryErr)
+	}
+	return completedTestRPCResult(response, runErr)
+}
+
+type nodeTestAttempt struct {
+	jsonBytes     []byte
+	consoleOutput string
+	runErr        error
+}
+
+// runNodeTestAttempt owns one package-script execution and its machine-readable
+// evidence. Keeping retry mechanics here guarantees the recovery attempt uses
+// the exact same typed request, environment, and reporter contract.
+func (s *Runtime) runNodeTestAttempt(
+	ctx context.Context,
+	args []string,
+	envs []*resources.EnvironmentVariable,
+	jsonFile string,
+) (nodeTestAttempt, error) {
+	if err := os.Remove(jsonFile); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nodeTestAttempt{}, fmt.Errorf("clear previous test report: %w", err)
+	}
+	testProc, err := s.runnerEnvironment.NewProcess("npm", args...)
+	if err != nil {
+		return nodeTestAttempt{}, fmt.Errorf("create test process: %w", err)
+	}
+	testProc.WithEnvironmentVariables(ctx, envs...)
+	var consoleOutput bytes.Buffer
+	testProc.WithOutput(io.MultiWriter(s.Logger, &consoleOutput))
+	runErr := testProc.Run(ctx)
+	jsonBytes, readErr := os.ReadFile(jsonFile) //nolint:gosec // agent-owned path under sourceDir
+	if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
+		return nodeTestAttempt{}, fmt.Errorf("read test report: %w", readErr)
+	}
+	return nodeTestAttempt{
+		jsonBytes:     jsonBytes,
+		consoleOutput: consoleOutput.String(),
+		runErr:        runErr,
+	}, nil
 }
 
 // nodeTestReporterConfiguration maps each package-owned runner to its
@@ -1019,23 +1063,14 @@ func (s *Runtime) ensureNodeDependencies(ctx context.Context) error {
 	return nil
 }
 
-// ensurePlaywrightBrowsers runs the locally installed Playwright CLI only when
-// package.json declares Playwright usage. `install` is cache-aware, so healthy
-// warm environments remain fast while fresh environments recover before Test.
-func (s *Runtime) ensurePlaywrightBrowsers(ctx context.Context) error {
-	manifest := s.packageManifest
-	if manifest == nil {
-		var err error
-		manifest, err = readNodePackageManifest(s.sourceLocation)
-		if err != nil {
-			return fmt.Errorf("load package manifest for Playwright provisioning: %w", err)
-		}
-	}
-	if !manifest.usesPlaywright() {
-		return nil
-	}
-	args := []string{"exec", "--offline", "--", "playwright", "install"}
-	s.Wool.Info("materializing Playwright browser assets", wool.Field("command", "npm "+strings.Join(args, " ")))
+// installPlaywrightBrowsers materializes only the engines proved missing by a
+// structured Playwright report. Browser binaries are intentionally recovered
+// from Test rather than eagerly downloading every engine during Runtime.Init.
+func (s *Runtime) installPlaywrightBrowsers(ctx context.Context, browsers []string) error {
+	args := append([]string{"exec", "--offline", "--", "playwright", "install"}, browsers...)
+	s.Wool.Info("materializing Playwright browser assets",
+		wool.Field("browsers", browsers),
+		wool.Field("command", "npm "+strings.Join(args, " ")))
 	proc, err := s.runnerEnvironment.NewProcess("npm", args...)
 	if err != nil {
 		return fmt.Errorf("create Playwright browser install process: %w", err)
@@ -1045,6 +1080,46 @@ func (s *Runtime) ensurePlaywrightBrowsers(ctx context.Context) error {
 		return fmt.Errorf("npm %s failed: %w", strings.Join(args, " "), err)
 	}
 	return nil
+}
+
+// missingPlaywrightBrowsers extracts the exact engine set from Playwright's
+// canonical missing-executable failures. It deliberately requires both the
+// launch failure and install guidance, so ordinary browser-named assertions do
+// not trigger dependency mutation. Each match is inspected locally to avoid a
+// project matrix naming another browser elsewhere in the JSON report.
+func missingPlaywrightBrowsers(report []byte) []string {
+	lower := strings.ToLower(string(report))
+	const missingExecutable = "executable doesn't exist"
+	if !strings.Contains(lower, missingExecutable) {
+		return nil
+	}
+	found := map[string]bool{}
+	for searchFrom := 0; searchFrom < len(lower); {
+		relative := strings.Index(lower[searchFrom:], missingExecutable)
+		if relative < 0 {
+			break
+		}
+		start := searchFrom + relative
+		end := min(len(lower), start+1024)
+		window := lower[start:end]
+		if !strings.Contains(window, "playwright install") {
+			searchFrom = start + len(missingExecutable)
+			continue
+		}
+		for _, browser := range []string{"chromium", "firefox", "webkit"} {
+			if strings.Contains(window, browser) {
+				found[browser] = true
+			}
+		}
+		searchFrom = start + len(missingExecutable)
+	}
+	var browsers []string
+	for _, browser := range []string{"chromium", "firefox", "webkit"} {
+		if found[browser] {
+			browsers = append(browsers, browser)
+		}
+	}
+	return browsers
 }
 
 func (s *Runtime) nodeDependenciesPresent(ctx context.Context) bool {
