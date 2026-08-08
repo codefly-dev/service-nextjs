@@ -50,3 +50,34 @@ func TestNodePackageManifestRecognizesNextJSAndJestProjects(t *testing.T) {
 		t.Fatalf("composite runner = %q, want %q", got, nodeTestGeneric)
 	}
 }
+
+func TestNodePackageManifestRecognizesDeclaredPlaywrightRuntime(t *testing.T) {
+	tests := []struct {
+		name     string
+		manifest *nodePackageManifest
+		want     bool
+	}{
+		{
+			name:     "test dependency",
+			manifest: &nodePackageManifest{DevDependencies: map[string]string{"@playwright/test": "1.54.1"}},
+			want:     true,
+		},
+		{
+			name:     "package script",
+			manifest: &nodePackageManifest{Scripts: map[string]string{"e2e": "bunx playwright test"}},
+			want:     true,
+		},
+		{
+			name:     "unrelated browser package",
+			manifest: &nodePackageManifest{DevDependencies: map[string]string{"vitest": "3.2.7"}},
+			want:     false,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := test.manifest.usesPlaywright(); got != test.want {
+				t.Fatalf("usesPlaywright = %v, want %v", got, test.want)
+			}
+		})
+	}
+}

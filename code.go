@@ -225,6 +225,25 @@ func (m *nodePackageManifest) testRunner(scriptName string) nodeTestRunner {
 	}
 }
 
+// usesPlaywright reports whether the package declares Playwright as a local
+// dependency or invokes it from any package-owned script. Init uses the same
+// manifest evidence as Test, so a fresh environment receives browser assets
+// before its first typed test/screenshot operation.
+func (m *nodePackageManifest) usesPlaywright() bool {
+	if m == nil {
+		return false
+	}
+	if m.hasDependency("@playwright/test") || m.hasDependency("playwright") {
+		return true
+	}
+	for _, command := range m.Scripts {
+		if strings.Contains(strings.ToLower(command), "playwright") {
+			return true
+		}
+	}
+	return false
+}
+
 func (m *nodePackageManifest) validationScripts() []string {
 	var scripts []string
 	for _, name := range []string{"typecheck", "build"} {
