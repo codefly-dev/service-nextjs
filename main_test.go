@@ -264,6 +264,30 @@ func TestParseNPMTestOutputHandlesNodeTAPSummary(t *testing.T) {
 	require.Zero(t, skipped)
 }
 
+func TestParseNPMTestOutputHandlesPlaywrightSetupFailure(t *testing.T) {
+	// Exact aggregate shape observed through the production headless harness:
+	// setup failed, so every dependent browser test was discovered but not run.
+	output := "\x1b[1A\x1b[2K  1 failed\n    [setup] › tests/auth.setup.ts:6:1 › authenticate\n  61 did not run\n"
+
+	run, passed, failed, skipped := parseNPMTestOutput(output)
+
+	require.EqualValues(t, 62, run)
+	require.Zero(t, passed)
+	require.EqualValues(t, 1, failed)
+	require.EqualValues(t, 61, skipped)
+}
+
+func TestParsePlaywrightOutputHandlesPassingFlakyAndSkipped(t *testing.T) {
+	output := "12 passed (18.2s)\n2 flaky\n3 skipped\n"
+
+	run, passed, failed, skipped := parsePlaywrightOutput(output)
+
+	require.EqualValues(t, 17, run)
+	require.EqualValues(t, 14, passed)
+	require.Zero(t, failed)
+	require.EqualValues(t, 3, skipped)
+}
+
 func TestBuilderCreate(t *testing.T) {
 	wool.SetGlobalLogLevel(wool.DEBUG)
 	ctx := context.Background()
