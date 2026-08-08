@@ -26,3 +26,12 @@ func TestCompletedTestRPCResultPreservesPreReportCrashes(t *testing.T) {
 	require.Nil(t, got)
 	require.ErrorIs(t, err, executionErr)
 }
+
+func TestPlaywrightReporterUsesItsJSONFileContract(t *testing.T) {
+	args, envs := nodeTestReporterConfiguration(nodeTestPlaywright, "/tmp/result.json")
+
+	require.Equal(t, []string{"--reporter=json"}, args)
+	require.Len(t, envs, 1)
+	require.Equal(t, "PLAYWRIGHT_JSON_OUTPUT_FILE", envs[0].Key)
+	require.Equal(t, "/tmp/result.json", envs[0].Value)
+}

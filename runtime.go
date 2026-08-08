@@ -350,6 +350,13 @@ func (s *Runtime) Init(ctx context.Context, req *runtimev0.InitRequest) (*runtim
 	if err := s.ensureNodeDependencies(ctx); err != nil {
 		return s.Runtime.InitError(err)
 	}
+	// Playwright intentionally ships browser binaries separately from its npm
+	// package. A fresh checkout is not runnable after npm install alone; let the
+	// plugin materialize those package-owned runtime assets idempotently inside
+	// the selected local/Nix/container environment.
+	if err := s.ensurePlaywrightBrowsers(ctx); err != nil {
+		return s.Runtime.InitError(err)
+	}
 
 	if s.Settings.HotReload && s.executionProfile == NextExecutionDevelopment {
 		dependencies := requirements.Clone()
@@ -789,15 +796,7 @@ func (s *Runtime) Test(ctx context.Context, req *runtimev0.TestRequest) (*runtim
 	jsonFile := filepath.Join(cacheDir, fmt.Sprintf("test-%d.json", time.Now().UnixNano()))
 	defer os.Remove(jsonFile)
 
-	var runnerArgs []string
-	switch runnerKind {
-	case nodeTestPlaywright:
-		runnerArgs = append(runnerArgs, "--reporter=json", "--output="+jsonFile)
-	case nodeTestVitest:
-		runnerArgs = append(runnerArgs, "--reporter=json", "--outputFile="+jsonFile)
-	case nodeTestJest:
-		runnerArgs = append(runnerArgs, "--json", "--outputFile="+jsonFile)
-	}
+	runnerArgs, reporterEnvs := nodeTestReporterConfiguration(runnerKind, jsonFile)
 
 	if pat := combineRegex(req.Filters); pat != "" {
 		switch runnerKind {
@@ -852,6 +851,9 @@ func (s *Runtime) Test(ctx context.Context, req *runtimev0.TestRequest) (*runtim
 	if err != nil {
 		return s.Runtime.TestErrorf(err, "getting environment variables")
 	}
+	// Reporter output is an agent-owned evidence path. Append it after project
+	// env so a stale user value cannot redirect or discard the current run.
+	testEnvs = append(testEnvs, reporterEnvs...)
 	testProc.WithEnvironmentVariables(ctx, testEnvs...)
 	var consoleOutput bytes.Buffer
 	testProc.WithOutput(io.MultiWriter(s.Logger, &consoleOutput))
@@ -904,6 +906,25 @@ func (s *Runtime) Test(ctx context.Context, req *runtimev0.TestRequest) (*runtim
 		run.ToProtoResponse(string(runnerKind), req.Suite, duration),
 		runErr,
 	)
+}
+
+// nodeTestReporterConfiguration maps each package-owned runner to its
+// machine-readable output contract. Playwright's `--output` flag is deliberately
+// absent: it controls the artifact directory, while the JSON reporter's file is
+// selected by PLAYWRIGHT_JSON_OUTPUT_FILE.
+func nodeTestReporterConfiguration(runner nodeTestRunner, jsonFile string) ([]string, []*resources.EnvironmentVariable) {
+	switch runner {
+	case nodeTestPlaywright:
+		return []string{"--reporter=json"}, []*resources.EnvironmentVariable{
+			resources.Env("PLAYWRIGHT_JSON_OUTPUT_FILE", jsonFile),
+		}
+	case nodeTestVitest:
+		return []string{"--reporter=json", "--outputFile=" + jsonFile}, nil
+	case nodeTestJest:
+		return []string{"--json", "--outputFile=" + jsonFile}, nil
+	default:
+		return nil, nil
+	}
 }
 
 func completedTestRPCResult(
@@ -990,6 +1011,34 @@ func (s *Runtime) ensureNodeDependencies(ctx context.Context) error {
 	proc, err := s.runnerEnvironment.NewProcess("npm", args...)
 	if err != nil {
 		return fmt.Errorf("create npm dependency process: %w", err)
+	}
+	proc.WithOutput(s.Logger)
+	if err := proc.Run(ctx); err != nil {
+		return fmt.Errorf("npm %s failed: %w", strings.Join(args, " "), err)
+	}
+	return nil
+}
+
+// ensurePlaywrightBrowsers runs the locally installed Playwright CLI only when
+// package.json declares Playwright usage. `install` is cache-aware, so healthy
+// warm environments remain fast while fresh environments recover before Test.
+func (s *Runtime) ensurePlaywrightBrowsers(ctx context.Context) error {
+	manifest := s.packageManifest
+	if manifest == nil {
+		var err error
+		manifest, err = readNodePackageManifest(s.sourceLocation)
+		if err != nil {
+			return fmt.Errorf("load package manifest for Playwright provisioning: %w", err)
+		}
+	}
+	if !manifest.usesPlaywright() {
+		return nil
+	}
+	args := []string{"exec", "--offline", "--", "playwright", "install"}
+	s.Wool.Info("materializing Playwright browser assets", wool.Field("command", "npm "+strings.Join(args, " ")))
+	proc, err := s.runnerEnvironment.NewProcess("npm", args...)
+	if err != nil {
+		return fmt.Errorf("create Playwright browser install process: %w", err)
 	}
 	proc.WithOutput(s.Logger)
 	if err := proc.Run(ctx); err != nil {
