@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -17,23 +16,24 @@ import (
 )
 
 // ARCHITECTURE: Code implements the codefly Code gRPC service for NextJS/Node.
-// It embeds DefaultCodeServer from core, which provides:
+// It embeds TypeScriptCodeServer from core, which provides:
 //   - File operations: ReadFile, WriteFile, CreateFile, DeleteFile, MoveFile, ListFiles, Search
 //   - Git operations: GitLog, GitDiff, GitShow, GitBlame
 //   - ShellExec: bounded process execution
 //
-// Node-specific overrides:
-//   - get_project_info: reads package.json for module/version/dependencies
+// Node-specific behavior is limited to project-local source fixing. Typed
+// project inspection stays in Core so every TypeScript agent exposes the same
+// dependency, package, import, and failure contract.
 type Code struct {
-	*corecode.DefaultCodeServer
+	*corecode.TypeScriptCodeServer
 	*Service
 	initialized bool
 }
 
 func NewCode(svc *Service) *Code {
 	c := &Code{
-		Service:           svc,
-		DefaultCodeServer: corecode.NewDefaultCodeServer("."),
+		Service:              svc,
+		TypeScriptCodeServer: corecode.NewTypeScriptCodeServer(".", nil),
 	}
 	return c
 }
@@ -49,8 +49,8 @@ func (c *Code) sourceDir() string {
 }
 
 func (c *Code) InitServer() {
-	c.DefaultCodeServer = corecode.NewDefaultCodeServer(c.sourceDir())
-	c.registerOverrides()
+	c.TypeScriptCodeServer = corecode.NewTypeScriptCodeServer(c.sourceDir(), nil)
+	c.SetSourceFixer(c.fixTypeScript)
 	c.initialized = true
 }
 
@@ -60,14 +60,9 @@ func (c *Code) ensureInit() {
 	}
 }
 
-func (c *Code) registerOverrides() {
-	c.SetSourceFixer(c.fixTypeScript)
-	c.Override("get_project_info", c.handleGetProjectInfo)
-}
-
 func (c *Code) Execute(ctx context.Context, req *codev0.CodeRequest) (*codev0.CodeResponse, error) {
 	c.ensureInit()
-	return c.DefaultCodeServer.Execute(ctx, req)
+	return c.TypeScriptCodeServer.Execute(ctx, req)
 }
 
 type nodePackageManifest struct {
@@ -278,76 +273,4 @@ func (c *Code) runnerEnvironment(ctx context.Context) runners.RunnerEnvironment 
 		runtimeContext = c.Service.Base.Runtime.RuntimeContext
 	}
 	return runners.ResolveStandaloneEnvironment(ctx, c.sourceDir(), runtimeContext)
-}
-
-// ── Handlers ────────────────────────────────────────────
-
-func (c *Code) handleGetProjectInfo(_ context.Context, _ *codev0.CodeRequest) (*codev0.CodeResponse, error) {
-	srcDir := c.sourceDir()
-	resp := &codev0.GetProjectInfoResponse{Language: "typescript"}
-
-	// Read package.json for module name and version.
-	data, err := os.ReadFile(filepath.Join(srcDir, "package.json"))
-	if err == nil {
-		resp.Module, resp.LanguageVersion = parsePackageJSON(string(data))
-	}
-
-	// File hashes for change detection.
-	resp.FileHashes = computeTSFileHashes(srcDir)
-
-	return &codev0.CodeResponse{Result: &codev0.CodeResponse_GetProjectInfo{
-		GetProjectInfo: resp,
-	}}, nil
-}
-
-// ── package.json parsing ────────────────────────────────
-
-func parsePackageJSON(content string) (name, version string) {
-	// Simple extraction without a JSON dependency.
-	for _, line := range strings.Split(content, "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, `"name"`) {
-			name = extractJSONStringValue(line)
-		}
-		if strings.HasPrefix(line, `"version"`) {
-			version = extractJSONStringValue(line)
-		}
-	}
-	return
-}
-
-func extractJSONStringValue(line string) string {
-	parts := strings.SplitN(line, ":", 2)
-	if len(parts) != 2 {
-		return ""
-	}
-	v := strings.TrimSpace(parts[1])
-	v = strings.Trim(v, `",`)
-	return v
-}
-
-func computeTSFileHashes(srcDir string) map[string]string {
-	hashes := make(map[string]string)
-	filepath.Walk(srcDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() {
-			return nil
-		}
-		name := info.Name()
-		ext := filepath.Ext(name)
-		if ext != ".ts" && ext != ".tsx" && ext != ".js" && ext != ".jsx" && name != "package.json" {
-			return nil
-		}
-		// Skip node_modules etc.
-		if strings.Contains(path, "node_modules") || strings.Contains(path, ".next") {
-			return nil
-		}
-		rel, _ := filepath.Rel(srcDir, path)
-		data, err := os.ReadFile(path)
-		if err == nil {
-			h := sha256.Sum256(data)
-			hashes[rel] = fmt.Sprintf("%x", h)
-		}
-		return nil
-	})
-	return hashes
 }
