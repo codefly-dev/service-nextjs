@@ -346,12 +346,6 @@ func (s *Runtime) Init(ctx context.Context, req *runtimev0.InitRequest) (*runtim
 		return s.Runtime.InitError(err)
 	}
 
-	// Dependency installation is an agent concern. A fresh CI checkout and a
-	// newly generated service must not need provider-specific `npm ci` steps.
-	if err := s.ensureNodeDependencies(ctx); err != nil {
-		return s.Runtime.InitError(err)
-	}
-
 	if s.Settings.HotReload && s.executionProfile == NextExecutionDevelopment {
 		dependencies := requirements.Clone()
 		dependencies.Localize(s.Location)
@@ -455,6 +449,12 @@ func (s *Runtime) Start(ctx context.Context, req *runtimev0.StartRequest) (*runt
 	allEnvs, err := s.EnvironmentVariables.All()
 	if err != nil {
 		return s.Runtime.StartErrorf(err, "getting environment variables")
+	}
+	// ARCHITECTURE: Init is also used to attach this agent for read-only Code
+	// and Tooling RPCs. Install project dependencies only at an execution
+	// boundary so metadata inspection stays offline and side-effect free.
+	if err := s.ensureNodeDependencies(ctx); err != nil {
+		return s.Runtime.StartErrorf(err, "preparing Node.js dependencies")
 	}
 	commonRuntimeEnvs := []*resources.EnvironmentVariable{
 		resources.Env("UV_THREADPOOL_SIZE", "2"),
@@ -778,6 +778,9 @@ func (s *Runtime) Test(ctx context.Context, req *runtimev0.TestRequest) (*runtim
 		return s.Runtime.TestErrorf(fmt.Errorf("package.json has no %q script", npmScript), "selecting Node.js test script")
 	}
 	runnerKind := manifest.testRunner(npmScript)
+	if err := s.ensureNodeDependencies(ctx); err != nil {
+		return s.Runtime.TestErrorf(err, "preparing Node.js dependencies")
+	}
 
 	// Allocate a JSON output file under the project's .codefly cache.
 	// Both vitest and playwright support writing JSON to disk via a
@@ -1223,6 +1226,9 @@ func nodeDependencyCacheKey(sourceLocation, executionPlatform string) (string, e
 func (s *Runtime) runNPM(ctx context.Context, args ...string) (string, error) {
 	if s.runnerEnvironment == nil {
 		return "", fmt.Errorf("runner environment is not initialized")
+	}
+	if err := s.ensureNodeDependencies(ctx); err != nil {
+		return "", fmt.Errorf("prepare Node.js dependencies: %w", err)
 	}
 	proc, err := s.runnerEnvironment.NewProcess("npm", args...)
 	if err != nil {

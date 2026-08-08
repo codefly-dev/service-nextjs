@@ -125,7 +125,7 @@ func TestInitAppliesRequestedRuntimeContextBeforeNetworkValidation(t *testing.T)
 	require.Equal(t, resources.RuntimeContextContainer, runtime.Runtime.RuntimeContext.Kind)
 }
 
-func TestSourceOnlyNodeRuntimeInitializesWithoutHTTPEndpoint(t *testing.T) {
+func TestSourceOnlyNodeRuntimeInitializesWithoutHTTPEndpointOrInstallingDependencies(t *testing.T) {
 	ctx := context.Background()
 	tmpDir := t.TempDir()
 	identity, environment := testIdentity(t, tmpDir)
@@ -133,7 +133,7 @@ func TestSourceOnlyNodeRuntimeInitializesWithoutHTTPEndpoint(t *testing.T) {
 	require.NoError(t, os.MkdirAll(source, 0o755))
 	require.NoError(t, os.WriteFile(
 		path.Join(source, "package.json"),
-		[]byte(`{"name":"source-only-node","private":true}`),
+		[]byte(`{"name":"source-only-node","private":true,"dependencies":{"missing-local-package":"file:../missing-local-package"}}`),
 		0o644,
 	))
 
@@ -154,6 +154,10 @@ func TestSourceOnlyNodeRuntimeInitializesWithoutHTTPEndpoint(t *testing.T) {
 	})
 	require.NoError(t, err, "runtime failures are returned in the typed init status")
 	require.Equal(t, runtimev0.InitStatus_READY, response.GetStatus().GetState())
+	_, err = os.Stat(path.Join(source, "node_modules"))
+	require.ErrorIs(t, err, os.ErrNotExist, "read-only Init must not install dependencies")
+	_, err = os.Stat(path.Join(source, "package-lock.json"))
+	require.ErrorIs(t, err, os.ErrNotExist, "read-only Init must not generate a lockfile")
 
 	start, err := runtime.Start(ctx, &runtimev0.StartRequest{})
 	require.NoError(t, err, "runtime failures are returned in the typed start status")
