@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	runtimev0 "github.com/codefly-dev/core/generated/go/codefly/services/runtime/v0"
 	"github.com/stretchr/testify/require"
@@ -60,4 +61,26 @@ func TestMissingPlaywrightBrowsersRejectsOrdinaryFailures(t *testing.T) {
 	for _, report := range tests {
 		require.Empty(t, missingPlaywrightBrowsers(report))
 	}
+}
+
+func TestConsoleFallbackPreservesTypedPlaywrightFailureContract(t *testing.T) {
+	runtime := NewRuntime(NewService())
+	console := "1 failed\n  [setup] › tests/auth.setup.ts:6:1 › authenticate\n61 did not run\n"
+
+	response, err := runtime.completedConsoleTestResult(
+		"e2e",
+		nodeTestPlaywright,
+		[]string{"run", "test", "--", "--reporter=json"},
+		console,
+		30*time.Second,
+		errors.New("exit status 1"),
+	)
+
+	require.NoError(t, err)
+	require.Equal(t, runtimev0.TestRunResult_FAILED, response.GetResult().GetState())
+	require.EqualValues(t, 62, response.GetCounts().GetTotal())
+	require.EqualValues(t, 1, response.GetCounts().GetFailed())
+	require.EqualValues(t, 61, response.GetCounts().GetSkipped())
+	require.EqualValues(t, 62, response.GetTestsRun(), "legacy projection must match the typed contract")
+	require.Contains(t, response.GetOutput(), "authenticate")
 }

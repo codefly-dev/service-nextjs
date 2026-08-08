@@ -19,6 +19,7 @@ import (
 	"time"
 
 	basev0 "github.com/codefly-dev/core/generated/go/codefly/base/v0"
+	"google.golang.org/protobuf/types/known/durationpb"
 
 	"github.com/codefly-dev/core/agents/helpers/code"
 	"github.com/codefly-dev/core/agents/services"
@@ -873,25 +874,7 @@ func (s *Runtime) Test(ctx context.Context, req *runtimev0.TestRequest) (*runtim
 	// produces non-zero exit code AND a complete JSON file; the
 	// structured response carries the per-case detail.
 	if len(bytes.TrimSpace(jsonBytes)) == 0 {
-		run, passed, failed, skipped := parseNPMTestOutput(consoleOutput)
-		if run == 0 {
-			if runErr == nil {
-				runErr = fmt.Errorf("test script completed without machine-readable or parseable results")
-			}
-			return s.Runtime.TestErrorf(runErr, "test runner produced no results")
-		}
-		failures := []string(nil)
-		if runErr != nil {
-			failures = append(failures, runErr.Error())
-		}
-		resp, responseErr := s.Runtime.TestResponseWithResults(run, passed, failed, skipped, 0, failures, runErr)
-		resp.Output = "composite npm test script: aggregate counts parsed from console output; per-case JSON was unavailable"
-		s.Wool.Forwardf("Tests: %d passed, %d failed, %d skipped", passed, failed, skipped)
-		// A completed test run communicates failures in its structured
-		// response. Returning a non-nil RPC error alongside that response makes
-		// gRPC discard every case and assertion detail; the Codefly caller owns
-		// translating TestSucceeded(response) into a non-zero command exit.
-		return completedTestRPCResult(resp, responseErr)
+		return s.completedConsoleTestResult(req.Suite, runnerKind, args, consoleOutput, duration, runErr)
 	}
 	var run *javascript.StructuredTestRun
 	switch runnerKind {
@@ -902,9 +885,11 @@ func (s *Runtime) Test(ctx context.Context, req *runtimev0.TestRequest) (*runtim
 	}
 
 	if run == nil || (len(run.Suites) == 0 && runErr != nil) {
-		// Runner crashed before producing JSON — surface the raw
-		// error rather than an empty structured response.
-		return s.Runtime.TestErrorf(runErr, "test runner failed before producing JSON output")
+		// Some runner versions can emit a JSON envelope without case suites for
+		// setup/global failures. The native summary remains authoritative enough
+		// to preserve discovery and failure counts instead of laundering an
+		// executed red suite into a zero-test UNKNOWN response.
+		return s.completedConsoleTestResult(req.Suite, runnerKind, args, consoleOutput, duration, runErr)
 	}
 
 	s.Wool.Forwardf("Tests: %s", run.LegacyTestSummary().SummaryLine())
@@ -912,6 +897,70 @@ func (s *Runtime) Test(ctx context.Context, req *runtimev0.TestRequest) (*runtim
 	if recoveryErr != nil {
 		response.Output = fmt.Sprintf("automatic Playwright browser recovery failed: %v", recoveryErr)
 	}
+	return completedTestRPCResult(response, runErr)
+}
+
+// completedConsoleTestResult preserves the typed TestResponse contract when a
+// package-owned runner cannot provide per-case JSON. Aggregates are still real
+// execution evidence: callers must receive Counts and Result, not the legacy
+// flat fields alone, or an executed red suite becomes an UNKNOWN zero-test run.
+func (s *Runtime) completedConsoleTestResult(
+	suite string,
+	runnerKind nodeTestRunner,
+	args []string,
+	consoleOutput string,
+	duration time.Duration,
+	runErr error,
+) (*runtimev0.TestResponse, error) {
+	total, passed, failed, skipped := parseNPMTestOutput(consoleOutput)
+	if total == 0 {
+		if runErr == nil {
+			runErr = fmt.Errorf("test script completed without machine-readable or parseable results")
+		}
+		return s.Runtime.TestErrorf(runErr, "test runner produced no results")
+	}
+	state := runtimev0.TestRunResult_PASSED
+	message := "all tests passed"
+	if failed > 0 {
+		state = runtimev0.TestRunResult_FAILED
+		message = fmt.Sprintf("%d test(s) failed", failed)
+	} else if runErr != nil {
+		state = runtimev0.TestRunResult_ERRORED
+		message = "test command failed after producing aggregate results"
+	}
+	statusState := runtimev0.TestStatus_SUCCESS
+	if state != runtimev0.TestRunResult_PASSED {
+		statusState = runtimev0.TestStatus_ERROR
+	}
+	diagnostics := llmout.Compress("npm", args, consoleOutput)
+	failures := []string(nil)
+	if state != runtimev0.TestRunResult_PASSED && strings.TrimSpace(diagnostics) != "" {
+		failures = append(failures, diagnostics)
+	}
+	response := &runtimev0.TestResponse{
+		Status: &runtimev0.TestStatus{State: statusState, Message: message},
+		Run: &runtimev0.TestRun{
+			Runner:    string(runnerKind),
+			SuiteName: suite,
+			Duration:  durationpb.New(duration),
+		},
+		Result: &runtimev0.TestRunResult{State: state, Message: message},
+		Counts: &runtimev0.TestCounts{
+			Total:   total,
+			Passed:  passed,
+			Failed:  failed,
+			Skipped: skipped,
+		},
+		Output:       diagnostics,
+		TestsRun:     total,
+		TestsPassed:  passed,
+		TestsFailed:  failed,
+		TestsSkipped: skipped,
+		Failures:     failures,
+	}
+	s.Wool.Forwardf("Tests: %d passed, %d failed, %d skipped", passed, failed, skipped)
+	// A completed test run communicates failures in its structured response.
+	// Returning a non-nil RPC error alongside it makes gRPC discard the evidence.
 	return completedTestRPCResult(response, runErr)
 }
 
@@ -1234,13 +1283,13 @@ func parseVitestOutput(output string) (run, passed, failed, skipped int32) {
 	return
 }
 
-// parseNPMTestOutput combines the Vitest aggregate with Node's built-in test
-// runner summary. This is the truthful compatibility path for a consumer that
-// composes multiple commands in its npm test script: npm forwards Codefly's
-// JSON flags only to the final command, so a single per-case JSON envelope is
-// unavailable even though every command completed.
+// parseNPMTestOutput combines Vitest, Playwright, and Node built-in test runner
+// summaries. This is the truthful compatibility path for a consumer that
+// composes multiple commands in its npm test script or a runner failure whose
+// JSON envelope contains no cases.
 func parseNPMTestOutput(output string) (run, passed, failed, skipped int32) {
 	run, passed, failed, skipped = parseVitestOutput(output)
+	playwrightRun, playwrightPassed, playwrightFailed, playwrightSkipped := parsePlaywrightOutput(output)
 	var nodeRun, nodePassed, nodeFailed, nodeSkipped int32
 	for _, line := range strings.Split(output, "\n") {
 		line = strings.TrimSpace(ansiEscape.ReplaceAllString(line, ""))
@@ -1264,7 +1313,48 @@ func parseNPMTestOutput(output string) (run, passed, failed, skipped int32) {
 			}
 		}
 	}
-	return run + nodeRun, passed + nodePassed, failed + nodeFailed, skipped + nodeSkipped
+	return run + playwrightRun + nodeRun,
+		passed + playwrightPassed + nodePassed,
+		failed + playwrightFailed + nodeFailed,
+		skipped + playwrightSkipped + nodeSkipped
+}
+
+var playwrightSummaryLine = regexp.MustCompile(`^(\d+)\s+(passed|failed|flaky|skipped|did not run)(?:\s+\([^)]*\))?$`)
+
+// parsePlaywrightOutput recognizes only final Playwright aggregate lines. In
+// particular, dependent tests reported as "did not run" remain part of the
+// discovered total and map to the protocol's closest aggregate state, skipped.
+func parsePlaywrightOutput(output string) (run, passed, failed, skipped int32) {
+	var flaky, notRun int32
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(ansiEscape.ReplaceAllString(line, ""))
+		match := playwrightSummaryLine.FindStringSubmatch(line)
+		if len(match) != 3 {
+			continue
+		}
+		var count int32
+		if _, err := fmt.Sscanf(match[1], "%d", &count); err != nil {
+			continue
+		}
+		switch match[2] {
+		case "passed":
+			passed = max(passed, count)
+		case "failed":
+			failed = max(failed, count)
+		case "flaky":
+			// Flaky tests eventually passed; the JSON contract carries a
+			// distinct Flaky count when available, while the aggregate fallback
+			// treats them as executable passes.
+			flaky = max(flaky, count)
+		case "skipped":
+			skipped = max(skipped, count)
+		case "did not run":
+			notRun = max(notRun, count)
+		}
+	}
+	passed += flaky
+	skipped += notRun
+	return passed + failed + skipped, passed, failed, skipped
 }
 
 /* Details */
