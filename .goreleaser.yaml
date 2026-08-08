@@ -3,19 +3,36 @@ version: 2
 project_name: service-nextjs
 
 builds:
-  - id: darwin
+  # ARCHITECTURE: Core's authoritative source inspection uses real
+  # tree-sitter grammars. Agent releases therefore require CGO and the
+  # platform compilers supplied by goreleaser/goreleaser-cross; disabling
+  # CGO would silently make the production parser impossible to ship.
+  - id: darwin-amd64
     binary: service-nextjs
     env:
-      - CGO_ENABLED=0
+      - CGO_ENABLED=1
+      - CC=o64-clang
+      - CXX=o64-clang++
     goos:
       - darwin
     goarch:
       - amd64
-      - arm64
-  - id: linux
+  - id: darwin-arm64
     binary: service-nextjs
     env:
-      - CGO_ENABLED=0
+      - CGO_ENABLED=1
+      - CC=oa64-clang
+      - CXX=oa64-clang++
+    goos:
+      - darwin
+    goarch:
+      - arm64
+  - id: linux-amd64
+    binary: service-nextjs
+    env:
+      - CGO_ENABLED=1
+      - CC=x86_64-linux-gnu-gcc
+      - CXX=x86_64-linux-gnu-g++
     goos:
       - linux
     goarch:
