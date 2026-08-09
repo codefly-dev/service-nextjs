@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	corecode "github.com/codefly-dev/core/code"
 	"github.com/codefly-dev/core/failures"
 	basev0 "github.com/codefly-dev/core/generated/go/codefly/base/v0"
 	codev0 "github.com/codefly-dev/core/generated/go/codefly/services/code/v0"
@@ -11,9 +12,9 @@ import (
 	toolingv0 "github.com/codefly-dev/core/generated/go/codefly/services/tooling/v0"
 )
 
-// ARCHITECTURE: Tooling implements the codefly Tooling gRPC service for NextJS/Node.
-// Delegates to Code for project metadata. Semantic code intelligence belongs
-// to Mind, not this plugin contract.
+// ARCHITECTURE: Tooling implements the codefly Tooling gRPC service for
+// NextJS/Node. It delegates project metadata and semantic projection to Code;
+// project bytes remain inside Codefly and Mind receives typed facts only.
 type Tooling struct {
 	toolingv0.UnimplementedToolingServer
 	code    *Code
@@ -99,6 +100,12 @@ func (t *Tooling) Lint(ctx context.Context, req *toolingv0.LintRequest) (*toolin
 
 func NewTooling(code *Code, runtime *Runtime) *Tooling {
 	return &Tooling{code: code, runtime: runtime}
+}
+
+// GetSemanticIndex delegates the body-free projection to Core through the
+// production Next.js Code server.
+func (t *Tooling) GetSemanticIndex(ctx context.Context, req *toolingv0.GetSemanticIndexRequest) (*toolingv0.GetSemanticIndexResponse, error) {
+	return corecode.NewSourceTooling(t.code).GetSemanticIndex(ctx, req)
 }
 
 func (t *Tooling) GetProjectInfo(ctx context.Context, req *toolingv0.GetProjectInfoRequest) (*toolingv0.GetProjectInfoResponse, error) {
