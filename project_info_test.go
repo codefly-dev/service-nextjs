@@ -40,6 +40,9 @@ func TestProjectInfoCarriesDeclaredDependenciesAndSourceImportsAcrossCodeAndTool
 		t.Fatal(err)
 	}
 	assertNodeProjectInfo(t, codeResponse.GetGetProjectInfo().GetModule(), codeResponse.GetGetProjectInfo().GetDependencies(), codeResponse.GetGetProjectInfo().GetSourceFiles())
+	if got := codeResponse.GetGetProjectInfo().GetLanguage(); got != "typescript" {
+		t.Fatalf("code project language = %q, want typescript", got)
+	}
 
 	toolingResponse, err := NewTooling(server, nil).GetProjectInfo(context.Background(), &toolingv0.GetProjectInfoRequest{})
 	if err != nil {
@@ -49,6 +52,7 @@ func TestProjectInfoCarriesDeclaredDependenciesAndSourceImportsAcrossCodeAndTool
 		t.Fatalf("tooling project info failure = %+v", toolingResponse.GetFailure())
 	}
 	if toolingResponse.GetModule() != "checkout-ui" || len(toolingResponse.GetDependencies()) != 1 ||
+		toolingResponse.GetLanguage() != "typescript" ||
 		toolingResponse.GetDependencies()[0].GetName() != "express" || toolingResponse.GetDependencies()[0].GetVersion() != "^5.1.0" ||
 		len(toolingResponse.GetSourceFiles()) != 1 || toolingResponse.GetSourceFiles()[0].GetPath() != "src/server.ts" ||
 		len(toolingResponse.GetSourceFiles()[0].GetImports()) != 1 || toolingResponse.GetSourceFiles()[0].GetImports()[0] != "express" {
@@ -60,6 +64,37 @@ func TestProjectInfoCarriesDeclaredDependenciesAndSourceImportsAcrossCodeAndTool
 	}
 	if semantic.GetFailure() != nil || semantic.GetIndex().GetState() != basev0.SemanticIndexState_SEMANTIC_INDEX_STATE_COMPLETE || len(semantic.GetIndex().GetFiles()) != 1 || len(semantic.GetIndex().GetSymbols()) == 0 {
 		t.Fatalf("semantic index = %+v", semantic)
+	}
+}
+
+func TestProjectInfoReportsJavaScriptForJavaScriptOnlyProject(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "package.json"), []byte(`{"name":"payments","main":"index.js"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "index.js"), []byte("module.exports = { charge() {} };\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	service := NewService()
+	service.sourceLocation = dir
+	server := NewCode(service)
+	codeResponse, err := server.Execute(context.Background(), &codev0.CodeRequest{
+		Operation: &codev0.CodeRequest_GetProjectInfo{GetProjectInfo: &codev0.GetProjectInfoRequest{}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := codeResponse.GetGetProjectInfo().GetLanguage(); got != "javascript" {
+		t.Fatalf("code project language = %q, want javascript", got)
+	}
+
+	toolingResponse, err := NewTooling(server, nil).GetProjectInfo(context.Background(), &toolingv0.GetProjectInfoRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := toolingResponse.GetLanguage(); got != "javascript" {
+		t.Fatalf("tooling project language = %q, want javascript", got)
 	}
 }
 

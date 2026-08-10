@@ -191,7 +191,10 @@ func (s *Service) GetAgentInformation(ctx context.Context, _ *agentv0.AgentInfor
 		},
 		Toolchains: []agentv0.Toolchain_Type{agentv0.Toolchain_NPM},
 		HotReload:  true,
-		Languages:  []agentv0.Language_Type{agentv0.Language_TYPESCRIPT},
+		Languages: []agentv0.Language_Type{
+			agentv0.Language_TYPESCRIPT,
+			agentv0.Language_JAVASCRIPT,
+		},
 		Protocols:  []agentv0.Protocol_Type{agentv0.Protocol_HTTP},
 		ReadMe:     readme,
 		Validation: nextValidationCapabilities(),
