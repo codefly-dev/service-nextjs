@@ -62,7 +62,34 @@ func (c *Code) ensureInit() {
 
 func (c *Code) Execute(ctx context.Context, req *codev0.CodeRequest) (*codev0.CodeResponse, error) {
 	c.ensureInit()
-	return c.TypeScriptCodeServer.Execute(ctx, req)
+	response, err := c.TypeScriptCodeServer.Execute(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	if project := response.GetGetProjectInfo(); project != nil {
+		project.Language = nodeProjectLanguage(project.GetSourceFiles())
+	}
+	return response, nil
+}
+
+// nodeProjectLanguage preserves TypeScript for mixed or TypeScript projects
+// and reports JavaScript when the project contains only JavaScript sources.
+// ARCHITECTURE: Core owns source discovery; this agent classifies the returned
+// typed inventory instead of performing a second filesystem walk.
+func nodeProjectLanguage(sourceFiles []*codev0.SourceFileInfo) string {
+	hasJavaScript := false
+	for _, source := range sourceFiles {
+		switch strings.ToLower(filepath.Ext(source.GetPath())) {
+		case ".ts", ".tsx", ".mts", ".cts":
+			return "typescript"
+		case ".js", ".jsx", ".mjs", ".cjs":
+			hasJavaScript = true
+		}
+	}
+	if hasJavaScript {
+		return "javascript"
+	}
+	return "typescript"
 }
 
 type nodePackageManifest struct {
