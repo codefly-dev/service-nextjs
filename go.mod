@@ -6,7 +6,7 @@ toolchain go1.26.4
 
 require (
 	github.com/Masterminds/semver v1.5.0
-	github.com/codefly-dev/core v0.2.86
+	github.com/codefly-dev/core v0.2.87
 	github.com/stretchr/testify v1.11.1
 	google.golang.org/grpc v1.82.1
 	google.golang.org/protobuf v1.36.11
