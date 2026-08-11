@@ -6,9 +6,11 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/codefly-dev/core/agents"
 	basev0 "github.com/codefly-dev/core/generated/go/codefly/base/v0"
 	codev0 "github.com/codefly-dev/core/generated/go/codefly/services/code/v0"
 	toolingv0 "github.com/codefly-dev/core/generated/go/codefly/services/tooling/v0"
+	"github.com/codefly-dev/core/resources"
 )
 
 func TestProjectInfoCarriesDeclaredDependenciesAndSourceImportsAcrossCodeAndTooling(t *testing.T) {
@@ -64,6 +66,57 @@ func TestProjectInfoCarriesDeclaredDependenciesAndSourceImportsAcrossCodeAndTool
 	}
 	if semantic.GetFailure() != nil || semantic.GetIndex().GetState() != basev0.SemanticIndexState_SEMANTIC_INDEX_STATE_COMPLETE || len(semantic.GetIndex().GetFiles()) != 1 || len(semantic.GetIndex().GetSymbols()) == 0 {
 		t.Fatalf("semantic index = %+v", semantic)
+	}
+}
+
+func TestProjectInfoLoadsAttachedDeclarationBeforeRuntime(t *testing.T) {
+	physical := t.TempDir()
+	if err := os.WriteFile(filepath.Join(physical, "package.json"), []byte(`{"name":"preload-ui"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(physical, "index.ts"), []byte("export const ready = true;\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	serviceRoot := t.TempDir()
+	agentDefinition := &resources.Agent{Kind: resources.ServiceAgent, Publisher: "codefly.dev", Name: "nextjs", Version: "v0.0.0"}
+	declaration := &resources.Service{
+		Name: "source", Version: "0.0.0", Agent: agentDefinition,
+		Spec: map[string]any{"source-dir": "attached"},
+	}
+	declaration.WithDir(serviceRoot)
+	if err := declaration.Save(t.Context()); err != nil {
+		t.Fatalf("save service declaration: %v", err)
+	}
+	if err := os.Symlink(physical, filepath.Join(serviceRoot, "attached")); err != nil {
+		t.Fatalf("attach source: %v", err)
+	}
+	t.Setenv(agents.WorkDirEnvironment, serviceRoot)
+
+	service := NewService()
+	server := NewCode(service)
+	response, err := server.Execute(t.Context(), &codev0.CodeRequest{
+		Operation: &codev0.CodeRequest_GetProjectInfo{GetProjectInfo: &codev0.GetProjectInfoRequest{}},
+	})
+	if err != nil {
+		t.Fatalf("pre-runtime project info: %v", err)
+	}
+	if got := response.GetGetProjectInfo().GetModule(); got != "preload-ui" {
+		t.Fatalf("module = %q, want attached project", got)
+	}
+	semantic, err := NewTooling(server, nil).GetSemanticIndex(t.Context(), &toolingv0.GetSemanticIndexRequest{})
+	if err != nil {
+		t.Fatalf("pre-runtime semantic index: %v", err)
+	}
+	if semantic.GetFailure() != nil || semantic.GetIndex().GetState() != basev0.SemanticIndexState_SEMANTIC_INDEX_STATE_COMPLETE ||
+		len(semantic.GetIndex().GetFiles()) != 1 || len(semantic.GetIndex().GetSymbols()) == 0 {
+		t.Fatalf("pre-runtime semantic index = %+v, want complete attached source", semantic)
+	}
+	physicalResolved, err := filepath.EvalSymlinks(physical)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if service.currentSourceLocation() != physicalResolved || service.Settings.SourceDir != "attached" {
+		t.Fatalf("source binding = %q settings=%+v, want physical attached source", service.currentSourceLocation(), service.Settings)
 	}
 }
 

@@ -8,7 +8,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
+	"github.com/codefly-dev/core/agents"
 	corecode "github.com/codefly-dev/core/code"
 	basev0 "github.com/codefly-dev/core/generated/go/codefly/base/v0"
 	codev0 "github.com/codefly-dev/core/generated/go/codefly/services/code/v0"
@@ -27,7 +29,8 @@ import (
 type Code struct {
 	*corecode.TypeScriptCodeServer
 	*Service
-	initialized bool
+	serverMu          sync.Mutex
+	initializedSource string
 }
 
 func NewCode(svc *Service) *Code {
@@ -39,29 +42,42 @@ func NewCode(svc *Service) *Code {
 }
 
 func (c *Code) sourceDir() string {
-	if c.sourceLocation != "" {
-		return c.sourceLocation
+	if source := c.currentSourceLocation(); source != "" {
+		return source
 	}
-	if wd := os.Getenv("CODEFLY_AGENT_WORKDIR"); wd != "" {
-		return wd
+	if wd := os.Getenv(agents.WorkDirEnvironment); wd != "" {
+		return filepath.Join(wd, c.Settings.NodeSourceDir())
 	}
-	return c.Location
+	return filepath.Join(c.Location, c.Settings.NodeSourceDir())
 }
 
 func (c *Code) InitServer() {
-	c.TypeScriptCodeServer = corecode.NewTypeScriptCodeServer(c.sourceDir(), nil)
-	c.SetSourceFixer(c.fixTypeScript)
-	c.initialized = true
+	c.serverMu.Lock()
+	defer c.serverMu.Unlock()
+	c.initServer()
 }
 
-func (c *Code) ensureInit() {
-	if !c.initialized {
-		c.InitServer()
+func (c *Code) initServer() {
+	source := c.sourceDir()
+	if c.TypeScriptCodeServer != nil && c.initializedSource == source {
+		return
+	}
+	previous := c.TypeScriptCodeServer
+	c.TypeScriptCodeServer = corecode.NewTypeScriptCodeServer(source, nil)
+	c.SetSourceFixer(c.fixTypeScript)
+	c.initializedSource = source
+	if previous != nil {
+		_ = previous.Close()
 	}
 }
 
 func (c *Code) Execute(ctx context.Context, req *codev0.CodeRequest) (*codev0.CodeResponse, error) {
-	c.ensureInit()
+	c.serverMu.Lock()
+	defer c.serverMu.Unlock()
+	if _, err := c.resolveSourceLocation(ctx); err != nil {
+		return nil, fmt.Errorf("resolve Node source: %w", err)
+	}
+	c.initServer()
 	response, err := c.TypeScriptCodeServer.Execute(ctx, req)
 	if err != nil {
 		return nil, err

@@ -60,7 +60,7 @@ func (s *Builder) Load(ctx context.Context, req *builderv0.LoadRequest) (*builde
 			return nil
 		},
 	})
-	s.sourceLocation = s.Local("%s", s.Settings.NodeSourceDir())
+	s.setSourceLocation(s.Local("%s", s.Settings.NodeSourceDir()))
 	if req.GetIdentity() != nil {
 		s.relativeToWorkspace = serviceWorkspaceRelative(
 			req.GetIdentity().GetWorkspacePath(),
