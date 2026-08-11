@@ -212,11 +212,12 @@ func (s *Runtime) Load(ctx context.Context, req *runtimev0.LoadRequest) (*runtim
 	}
 
 	s.Runtime.SetEnvironment(req.Environment)
-	s.sourceLocation, err = s.LocalDirCreate(ctx, "%s", s.Settings.NodeSourceDir())
+	sourceLocation, err := s.LocalDirCreate(ctx, "%s", s.Settings.NodeSourceDir())
 	if err != nil {
 		return s.Runtime.LoadErrorf(err, "creating source location")
 	}
-	s.packageManifest, err = readNodePackageManifest(s.sourceLocation)
+	s.setSourceLocation(sourceLocation)
+	s.packageManifest, err = readNodePackageManifest(sourceLocation)
 	if err != nil {
 		return s.Runtime.LoadErrorf(err, "loading Node.js package manifest")
 	}

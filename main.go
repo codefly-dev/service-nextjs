@@ -4,7 +4,9 @@ import (
 	"context"
 	"embed"
 	"fmt"
+	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"google.golang.org/grpc/codes"
@@ -170,6 +172,39 @@ type Service struct {
 	*Settings
 
 	sourceLocation string
+	sourceMu       sync.Mutex
+}
+
+// resolveSourceLocation binds read-only Code and Tooling traffic to the real
+// configured project source before Runtime.Load. Core owns declaration
+// hydration, containment, and physical attachment resolution.
+func (s *Service) resolveSourceLocation(ctx context.Context) (string, error) {
+	s.sourceMu.Lock()
+	defer s.sourceMu.Unlock()
+	if s.sourceLocation != "" {
+		return s.sourceLocation, nil
+	}
+	location, err := s.Base.ResolveSourceLocation(ctx, s.Settings, s.Settings.NodeSourceDir)
+	if err != nil {
+		return "", err
+	}
+	s.sourceLocation = location
+	return location, nil
+}
+
+func (s *Service) currentSourceLocation() string {
+	s.sourceMu.Lock()
+	defer s.sourceMu.Unlock()
+	return s.sourceLocation
+}
+
+func (s *Service) setSourceLocation(location string) {
+	s.sourceMu.Lock()
+	defer s.sourceMu.Unlock()
+	if physical, err := filepath.EvalSymlinks(location); err == nil {
+		location = physical
+	}
+	s.sourceLocation = location
 }
 
 func (s *Service) GetAgentInformation(ctx context.Context, _ *agentv0.AgentInformationRequest) (*agentv0.AgentInformation, error) {
