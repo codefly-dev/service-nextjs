@@ -50,3 +50,30 @@ func TestNodePackageManifestRecognizesNextJSAndJestProjects(t *testing.T) {
 		t.Fatalf("composite runner = %q, want %q", got, nodeTestGeneric)
 	}
 }
+
+func TestNodePackageManifestTestRunnerPrefersScriptCommandOverInstalledDependency(t *testing.T) {
+	// A Vitest `test` script alongside an installed @playwright/test (used only by a
+	// separate e2e script) must resolve to Vitest: the command is authoritative.
+	vitestWithPlaywrightDep := &nodePackageManifest{
+		Scripts: map[string]string{
+			"test":     "npm run prepare && vitest run",
+			"test:e2e": "playwright test",
+		},
+		DevDependencies: map[string]string{"vitest": "3.2.7", "@playwright/test": "1.55.0"},
+	}
+	if got := vitestWithPlaywrightDep.testRunner("test"); got != nodeTestVitest {
+		t.Fatalf("test runner = %q, want %q", got, nodeTestVitest)
+	}
+	if got := vitestWithPlaywrightDep.testRunner("test:e2e"); got != nodeTestPlaywright {
+		t.Fatalf("e2e runner = %q, want %q", got, nodeTestPlaywright)
+	}
+
+	// A wrapper script that names no runner falls back to the installed dependency.
+	wrapper := &nodePackageManifest{
+		Scripts:         map[string]string{"test": "run-suite"},
+		DevDependencies: map[string]string{"@playwright/test": "1.55.0"},
+	}
+	if got := wrapper.testRunner("test"); got != nodeTestPlaywright {
+		t.Fatalf("wrapper runner = %q, want %q", got, nodeTestPlaywright)
+	}
+}
