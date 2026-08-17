@@ -250,13 +250,26 @@ func (m *nodePackageManifest) testRunner(scriptName string) nodeTestRunner {
 	if m == nil {
 		return nodeTestGeneric
 	}
+	// The script command is authoritative. A package that installs @playwright/test
+	// for a separate e2e script still runs its unit `test` script through Vitest, so
+	// an installed dependency must never override the runner the command itself names.
 	command := strings.ToLower(m.Scripts[scriptName])
 	switch {
-	case strings.Contains(command, "playwright") || m.hasDependency("@playwright/test"):
+	case strings.Contains(command, "playwright"):
 		return nodeTestPlaywright
-	case strings.Contains(command, "vitest") || m.hasDependency("vitest"):
+	case strings.Contains(command, "vitest"):
 		return nodeTestVitest
-	case strings.Contains(command, "jest") || m.hasDependency("jest"):
+	case strings.Contains(command, "jest"):
+		return nodeTestJest
+	}
+	// The command names no runner (e.g. a bare wrapper script): fall back to the
+	// installed test dependency.
+	switch {
+	case m.hasDependency("@playwright/test"):
+		return nodeTestPlaywright
+	case m.hasDependency("vitest"):
+		return nodeTestVitest
+	case m.hasDependency("jest"):
 		return nodeTestJest
 	default:
 		return nodeTestGeneric
