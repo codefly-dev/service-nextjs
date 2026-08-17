@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"strings"
 	"testing"
 
 	"github.com/codefly-dev/core/agents/services"
@@ -132,8 +131,8 @@ func TestDeployProfiles(t *testing.T) {
 				return
 			}
 
-			require.Empty(t, strings.TrimSpace(readDeploymentFile(t, destination, "base", "namespace.yaml")))
-			require.Empty(t, strings.TrimSpace(readDeploymentFile(t, destination, "overlays", environment.Name, "secret.yaml")))
+			requireNoDeploymentFile(t, destination, "base", "namespace.yaml")
+			requireNoDeploymentFile(t, destination, "overlays", environment.Name, "secret.yaml")
 			require.NotContains(t, readDeploymentFile(t, destination, "base", "kustomization.yaml"), "namespace.yaml")
 			require.NotContains(t, readDeploymentFile(t, destination, "overlays", environment.Name, "kustomization.yaml"), "secret.yaml")
 			require.Contains(t, deployment, "image: registry.example.com/mod/frontend@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
@@ -171,4 +170,10 @@ func readDeploymentFile(t *testing.T, destination string, elements ...string) st
 	content, err := os.ReadFile(filepath.Join(append([]string{destination}, elements...)...))
 	require.NoError(t, err)
 	return string(content)
+}
+
+func requireNoDeploymentFile(t *testing.T, destination string, elements ...string) {
+	t.Helper()
+	_, err := os.Stat(filepath.Join(append([]string{destination}, elements...)...))
+	require.ErrorIs(t, err, os.ErrNotExist)
 }
