@@ -12,6 +12,7 @@ import (
 
 	"github.com/codefly-dev/core/agents"
 	corecode "github.com/codefly-dev/core/code"
+	"github.com/codefly-dev/core/code/semantic"
 	basev0 "github.com/codefly-dev/core/generated/go/codefly/base/v0"
 	codev0 "github.com/codefly-dev/core/generated/go/codefly/services/code/v0"
 	runners "github.com/codefly-dev/core/runners/base"
@@ -36,7 +37,7 @@ type Code struct {
 func NewCode(svc *Service) *Code {
 	c := &Code{
 		Service:              svc,
-		TypeScriptCodeServer: corecode.NewTypeScriptCodeServer(".", nil),
+		TypeScriptCodeServer: corecode.NewTypeScriptCodeServer(".", semanticOpts()),
 	}
 	return c
 }
@@ -63,7 +64,7 @@ func (c *Code) initServer() {
 		return
 	}
 	previous := c.TypeScriptCodeServer
-	c.TypeScriptCodeServer = corecode.NewTypeScriptCodeServer(source, nil)
+	c.TypeScriptCodeServer = corecode.NewTypeScriptCodeServer(source, semanticOpts())
 	c.SetSourceFixer(c.fixTypeScript)
 	c.initializedSource = source
 	if previous != nil {
@@ -329,4 +330,12 @@ func (c *Code) runnerEnvironment(ctx context.Context) runners.RunnerEnvironment 
 		runtimeContext = c.Service.Base.Runtime.RuntimeContext
 	}
 	return runners.ResolveStandaloneEnvironment(ctx, c.sourceDir(), runtimeContext)
+}
+
+// semanticOpts installs the tree-sitter source analyzer that core omits by
+// default (so Go agents can build CGO-free). This agent forwards a semantic
+// index through its Tooling and already releases with CGO_ENABLED=1, so it
+// opts back in explicitly. See core/code.WithSemanticAnalyzer.
+func semanticOpts() []corecode.ServerOption {
+	return []corecode.ServerOption{corecode.WithSemanticAnalyzer(semantic.New())}
 }
