@@ -161,6 +161,30 @@ func TestBuilderTemplateInstallsWorkspaceGraphReproducibly(t *testing.T) {
 	}
 }
 
+func TestHealthProbePathIsScaffoldedAsARouteHandler(t *testing.T) {
+	t.Parallel()
+
+	deployment, err := fs.ReadFile(deploymentFS, "templates/deployment/kustomize/base/deployment.yaml.tmpl")
+	if err != nil {
+		t.Fatalf("read deployment template: %v", err)
+	}
+	const probePath = "/api/healthz"
+	if !strings.Contains(string(deployment), "path: "+probePath) {
+		t.Fatalf("deployment template no longer probes %s", probePath)
+	}
+
+	// App Router maps src/app/<segments>/route.ts to /<segments>, so the probe
+	// path must resolve to a scaffolded route handler or a healthy server 404s.
+	routeFile := "templates/factory/code/src/app" + strings.TrimSuffix(probePath, "/") + "/route.ts"
+	route, err := fs.ReadFile(factoryFS, routeFile)
+	if err != nil {
+		t.Fatalf("probe path %s has no scaffolded route (%s): %v", probePath, routeFile, err)
+	}
+	if !strings.Contains(string(route), "export function GET()") {
+		t.Fatalf("health route %s must export a GET handler, got:\n%s", routeFile, route)
+	}
+}
+
 func TestDeploymentIdentityMatchesContainerIdentity(t *testing.T) {
 	t.Parallel()
 

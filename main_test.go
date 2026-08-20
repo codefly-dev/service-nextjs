@@ -332,6 +332,13 @@ func TestBuilderCreate(t *testing.T) {
 	assertFileExists(t, serviceDir, "code/src/app/dashboard/page.tsx")
 	assertFileExists(t, serviceDir, "code/src/app/login/page.tsx")
 
+	// The generated deployment probes /api/healthz; the scaffold must ship the
+	// matching route so a healthy server does not fail its startup probe.
+	assertFileExists(t, serviceDir, "code/src/app/api/healthz/route.ts")
+	healthzContent, err := os.ReadFile(path.Join(serviceDir, "code/src/app/api/healthz/route.ts"))
+	require.NoError(t, err)
+	require.Contains(t, string(healthzContent), "export function GET()")
+
 	// Lib
 	assertFileExists(t, serviceDir, "code/src/lib/providers.tsx")
 	assertFileExists(t, serviceDir, "code/src/lib/utils.ts")
