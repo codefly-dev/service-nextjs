@@ -337,7 +337,7 @@ func TestBuilderCreate(t *testing.T) {
 	assertFileExists(t, serviceDir, "code/src/app/api/healthz/route.ts")
 	healthzContent, err := os.ReadFile(path.Join(serviceDir, "code/src/app/api/healthz/route.ts"))
 	require.NoError(t, err)
-	require.Contains(t, string(healthzContent), "export function GET()")
+	require.Regexp(t, `export\s+(async\s+)?function\s+GET\b|export\s+const\s+GET\b`, string(healthzContent))
 
 	// Lib
 	assertFileExists(t, serviceDir, "code/src/lib/providers.tsx")
