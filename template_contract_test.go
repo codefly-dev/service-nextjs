@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io/fs"
+	"regexp"
 	"strings"
 	"testing"
 	"text/template"
@@ -158,6 +159,39 @@ func TestBuilderTemplateInstallsWorkspaceGraphReproducibly(t *testing.T) {
 	}
 	if !strings.HasPrefix(rendered.String(), "FROM "+NodeImage+" AS base") {
 		t.Fatal("rendered Dockerfile does not use the pinned Node image")
+	}
+}
+
+func TestHealthProbePathIsScaffoldedAsARouteHandler(t *testing.T) {
+	t.Parallel()
+
+	deployment, err := fs.ReadFile(deploymentFS, "templates/deployment/kustomize/base/deployment.yaml.tmpl")
+	if err != nil {
+		t.Fatalf("read deployment template: %v", err)
+	}
+
+	// Every httpGet probe (startup, readiness, liveness) must resolve to a
+	// scaffolded route, not just one of them — repointing a single probe at an
+	// unscaffolded path is exactly the reported failure. Anchoring on httpGet
+	// avoids the other `path:` keys in the manifest (volume mounts, subPaths).
+	probes := regexp.MustCompile(`httpGet:\s*\n\s*path:\s*(\S+)`).FindAllStringSubmatch(string(deployment), -1)
+	if len(probes) == 0 {
+		t.Fatal("deployment template declares no httpGet probes")
+	}
+
+	// App Router accepts GET as a function or a const, sync or async.
+	getHandler := regexp.MustCompile(`export\s+(?:async\s+)?function\s+GET\b|export\s+const\s+GET\b`)
+	for _, probe := range probes {
+		// App Router maps src/app/<segments>/route.ts to /<segments>.
+		probePath := strings.Trim(probe[1], `"'`)
+		routeFile := "templates/factory/code/src/app" + probePath + "/route.ts"
+		route, err := fs.ReadFile(factoryFS, routeFile)
+		if err != nil {
+			t.Fatalf("probe path %s has no scaffolded route (%s): %v", probePath, routeFile, err)
+		}
+		if !getHandler.Match(route) {
+			t.Fatalf("health route %s must export a GET handler, got:\n%s", routeFile, route)
+		}
 	}
 }
 
