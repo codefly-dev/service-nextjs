@@ -313,6 +313,10 @@ func (s *Builder) Build(ctx context.Context, req *builderv0.BuildRequest) (*buil
 		Static:    s.Settings.IsStatic(),
 	}
 
+	if output := req.GetOutputDirectory(); output != "" {
+		return s.buildRecipe(ctx, docker, image, output)
+	}
+
 	err = shared.DeleteFile(ctx, s.Local("builder/Dockerfile"))
 	if err != nil {
 		return s.Builder.BuildError(err)
@@ -338,6 +342,38 @@ func (s *Builder) Build(ctx context.Context, req *builderv0.BuildRequest) (*buil
 		return s.Builder.BuildError(err)
 	}
 	s.Builder.WithDockerImages(image)
+	return s.Builder.BuildResponse()
+}
+
+// buildRecipe renders the Dockerfile and dockerignore into the caller-owned
+// output directory and returns a single-image DockerBuildPlan instead of
+// running docker build in-process. The recipe's dockerfile and dockerignore
+// paths are relative to that directory; its context is relative to the service
+// root (".") so the CLI evaluates the same context the in-process build used.
+func (s *Builder) buildRecipe(ctx context.Context, docker DockerTemplating, image *resources.DockerImage, output string) (*builderv0.BuildResponse, error) {
+	err := shared.DeleteFile(ctx, filepath.Join(output, "Dockerfile"))
+	if err != nil {
+		return s.Builder.BuildError(err)
+	}
+
+	err = s.Templates(ctx, docker, services.WithBuilder(builderFS).WithDestination("%s", output))
+	if err != nil {
+		return s.Builder.BuildError(err)
+	}
+
+	recipe := &builderv0.DockerBuildRecipe{
+		Name:         image.Name,
+		Dockerfile:   "Dockerfile",
+		Context:      ".",
+		Dockerignore: "dockerignore",
+		Image:        image.FullName(),
+		Platforms:    []string{"linux/amd64", "linux/arm64"},
+	}
+	plan, err := services.BuildDockerBuildPlan(output, []*builderv0.DockerBuildRecipe{recipe})
+	if err != nil {
+		return s.Builder.BuildError(err)
+	}
+	s.Builder.WithBuildPlan(plan)
 	return s.Builder.BuildResponse()
 }
 
