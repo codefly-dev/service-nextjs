@@ -350,8 +350,12 @@ func (s *Builder) Build(ctx context.Context, req *builderv0.BuildRequest) (*buil
 // running docker build in-process. The recipe's dockerfile and dockerignore
 // paths are relative to that directory; its context is relative to the service
 // root (".") so the CLI evaluates the same context the in-process build used.
+// The output directory is cleared before rendering because the plan digests
+// every file it contains: any leftover artifact (a stale ignore staged by an
+// interrupted CLI build, an editor file) would otherwise enter the recipe
+// inventory and the digest.
 func (s *Builder) buildRecipe(ctx context.Context, docker DockerTemplating, image *resources.DockerImage, output string) (*builderv0.BuildResponse, error) {
-	err := shared.DeleteFile(ctx, filepath.Join(output, "Dockerfile"))
+	err := os.RemoveAll(output)
 	if err != nil {
 		return s.Builder.BuildError(err)
 	}
@@ -362,7 +366,7 @@ func (s *Builder) buildRecipe(ctx context.Context, docker DockerTemplating, imag
 	}
 
 	recipe := &builderv0.DockerBuildRecipe{
-		Name:         image.Name,
+		Name:         filepath.Base(image.Name),
 		Dockerfile:   "Dockerfile",
 		Context:      ".",
 		Dockerignore: "dockerignore",
