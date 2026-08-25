@@ -526,7 +526,22 @@ func (s *Builder) Create(ctx context.Context, req *builderv0.CreateRequest) (*bu
 
 	// For static mode, override next.config.ts to use "export" output
 	if s.Settings.IsStatic() {
-		configContent := []byte("import type { NextConfig } from \"next\";\n\nconst nextConfig: NextConfig = {\n  output: \"export\",\n};\n\nexport default nextConfig;\n")
+		configContent := []byte(`import { fileURLToPath } from "node:url";
+import type { NextConfig } from "next";
+
+const nextConfig: NextConfig = {
+  output: "export",
+  turbopack: {
+    // Pin the watch/resolution root to this service directory. Left to infer
+    // it, Turbopack walks up to an outer lockfile and watches the whole parent
+    // tree — under codefly that tree is a lazybox per-task worktree git keeps
+    // rewriting, so the watcher wakes on every FS event and pegs a CPU core.
+    root: fileURLToPath(new URL(".", import.meta.url)),
+  },
+};
+
+export default nextConfig;
+`)
 		err = os.WriteFile(s.Local("%s/next.config.ts", s.Settings.NodeSourceDir()), configContent, 0644)
 		if err != nil {
 			return s.Builder.CreateError(err)

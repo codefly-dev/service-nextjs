@@ -457,8 +457,13 @@ func (s *Runtime) Start(ctx context.Context, req *runtimev0.StartRequest) (*runt
 	if err := s.ensureNodeDependencies(ctx); err != nil {
 		return s.Runtime.StartErrorf(err, "preparing Node.js dependencies")
 	}
-	commonRuntimeEnvs := nextRuntimeEnvironment(s.executionProfile)
+	commonRuntimeEnvs := []*resources.EnvironmentVariable{
+		resources.Env("UV_THREADPOOL_SIZE", "2"),
+		resources.Env("NODE_OPTIONS", "--max-old-space-size=2048"),
+		resources.Env("NEXT_TELEMETRY_DISABLED", "1"),
+	}
 	if s.executionProfile == NextExecutionProduction {
+		commonRuntimeEnvs = append(commonRuntimeEnvs, resources.Env("NODE_ENV", "production"))
 		build, buildErr := s.runnerEnvironment.NewProcess("npm", "run", "build")
 		if buildErr != nil {
 			return s.Runtime.StartErrorf(buildErr, "cannot create Next.js production build process")
@@ -496,6 +501,10 @@ func (s *Runtime) Start(ctx context.Context, req *runtimev0.StartRequest) (*runt
 	}
 	proc.WithEnvironmentVariables(ctx, allEnvs...)
 	proc.WithEnvironmentVariables(ctx, browserEnvs...)
+	// Cap process fan-out. Next.js development otherwise spawns jest-worker
+	// pools for SWC transform + type-check, a webpack worker pool, and
+	// node's libuv threadpool. The same bounds keep local production builds
+	// from exhausting a multi-service workstation.
 	proc.WithEnvironmentVariables(ctx, commonRuntimeEnvs...)
 	proc.WithOutput(s.Logger)
 
@@ -520,35 +529,6 @@ func (s *Runtime) Start(ctx context.Context, req *runtimev0.StartRequest) (*runt
 	s.Wool.Forwardf("Next.js %s server running on port %d", s.executionProfile, net.Port)
 
 	return s.Runtime.StartResponse()
-}
-
-// nextRuntimeEnvironment bounds the resource footprint of a launched Next.js
-// server. The caps (threadpool, heap) apply to every profile; profile-specific
-// entries diverge below.
-//
-// Development additionally disables the dev-server file watcher's polling
-// fallback. When native FS watching is unavailable — inotify exhaustion across
-// a many-service workspace, or a churning/torn-down worktree — webpack's
-// watchpack and chokidar otherwise fall back to interval polling that re-scans
-// the tree endlessly, pegging a full CPU core. An orphaned `next dev` then
-// busy-spins for days; forcing polling off keeps an idle or leaked server cheap.
-func nextRuntimeEnvironment(profile NextExecutionProfile) []*resources.EnvironmentVariable {
-	// Cap process fan-out. Next.js development otherwise spawns jest-worker
-	// pools for SWC transform + type-check, a webpack worker pool, and node's
-	// libuv threadpool. The same bounds keep local production builds from
-	// exhausting a multi-service workstation.
-	envs := []*resources.EnvironmentVariable{
-		resources.Env("UV_THREADPOOL_SIZE", "2"),
-		resources.Env("NODE_OPTIONS", "--max-old-space-size=2048"),
-		resources.Env("NEXT_TELEMETRY_DISABLED", "1"),
-	}
-	if profile == NextExecutionProduction {
-		return append(envs, resources.Env("NODE_ENV", "production"))
-	}
-	return append(envs,
-		resources.Env("WATCHPACK_POLLING", "false"),
-		resources.Env("CHOKIDAR_USEPOLLING", "false"),
-	)
 }
 
 type productionServerLaunch struct {

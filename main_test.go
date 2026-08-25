@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	agentv0 "github.com/codefly-dev/core/generated/go/codefly/services/agent/v0"
 	builderv0 "github.com/codefly-dev/core/generated/go/codefly/services/builder/v0"
 	runtimev0 "github.com/codefly-dev/core/generated/go/codefly/services/runtime/v0"
 
@@ -403,6 +404,43 @@ func TestBuilderSettingsDefaults(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, string(configContent), `"standalone"`)
 	require.NotContains(t, string(configContent), `"export"`)
+	// The dev watcher root must be pinned to the service directory so Turbopack
+	// does not watch the churning parent worktree.
+	require.Contains(t, string(configContent), "turbopack")
+	require.Contains(t, string(configContent), "root: fileURLToPath(new URL(\".\", import.meta.url))")
+}
+
+func TestBuilderStaticConfigPinsWatchRoot(t *testing.T) {
+	wool.SetGlobalLogLevel(wool.DEBUG)
+	ctx := context.Background()
+
+	tmpDir := t.TempDir()
+	identity, _ := testIdentity(t, tmpDir)
+
+	builder := NewBuilder(NewService())
+	_, err := builder.Load(ctx, &builderv0.LoadRequest{
+		Identity:     identity,
+		CreationMode: &builderv0.CreationMode{Communicate: true},
+	})
+	require.NoError(t, err)
+
+	// Static export overrides next.config.ts wholesale; it must still pin the
+	// Turbopack watch root so static-mode dev does not watch the churning
+	// parent worktree. Drive Create down the static branch via communicate answers.
+	builder.Builder.CreationMode = &builderv0.CreationMode{Communicate: true}
+	builder.answers = map[string]*agentv0.Answer{
+		Mode:               {Value: &agentv0.Answer_Choice{Choice: &agentv0.ChoiceAnswer{Option: "static"}}},
+		HotReload:          {Value: &agentv0.Answer_Confirm{Confirm: &agentv0.ConfirmAnswer{Confirmed: true}}},
+		AuthProviderOption: {Value: &agentv0.Answer_Choice{Choice: &agentv0.ChoiceAnswer{Option: "none"}}},
+	}
+	_, err = builder.Create(ctx, &builderv0.CreateRequest{})
+	require.NoError(t, err)
+
+	serviceDir := path.Join(tmpDir, "mod/frontend")
+	configContent, err := os.ReadFile(path.Join(serviceDir, "code/next.config.ts"))
+	require.NoError(t, err)
+	require.Contains(t, string(configContent), `"export"`)
+	require.Contains(t, string(configContent), "root: fileURLToPath(new URL(\".\", import.meta.url))")
 }
 
 func TestBuilderOptionsUseSingleChoiceProtocol(t *testing.T) {

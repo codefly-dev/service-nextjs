@@ -96,6 +96,14 @@ func TestFactoryTemplateUsesExplicitApplicationOwnedComposition(t *testing.T) {
 	if err != nil || !strings.Contains(string(nextConfig), "reactCompiler: true") {
 		t.Fatalf("Next config must enable React Compiler: err=%v content=%s", err, nextConfig)
 	}
+	// The dev watcher must be pinned to this service directory. Without an
+	// explicit turbopack.root, Turbopack infers the root from an outer lockfile
+	// and watches the whole (churning) parent worktree, pegging a CPU core.
+	for _, required := range []string{"turbopack", "root:", "import.meta.url"} {
+		if !strings.Contains(string(nextConfig), required) {
+			t.Fatalf("Next config must pin the Turbopack watch root (missing %q): %s", required, nextConfig)
+		}
+	}
 
 	packageGuide, err := fs.ReadFile(factoryFS, "templates/factory/code/packages/README.md")
 	if err != nil {
