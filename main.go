@@ -69,10 +69,16 @@ type Settings struct {
 // ConfigMount is the spec.config-mounts entry mapped onto core's typed
 // services.ConfigMount for rendering.
 type ConfigMount struct {
-	Name      string `yaml:"name"`
+	// Name becomes the pod volume name and so must be a DNS-1123 label
+	// (lowercase alphanumeric and '-'); left empty it is derived from ConfigMap.
+	Name string `yaml:"name"`
+	// ConfigMap is the ConfigMap projected into the pod. It is named, not
+	// created here, so it can be supplied out-of-band per environment.
 	ConfigMap string `yaml:"config-map"`
+	// MountPath must be an absolute container path.
 	MountPath string `yaml:"mount-path"`
-	Optional  bool   `yaml:"optional,omitempty"`
+	// Optional lets the pod start even when the ConfigMap is absent.
+	Optional bool `yaml:"optional,omitempty"`
 }
 
 type NextExecutionProfile string

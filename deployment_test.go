@@ -166,26 +166,63 @@ func TestDeployProfiles(t *testing.T) {
 }
 
 func TestDeployRendersConfigMounts(t *testing.T) {
-	ctx := context.Background()
 	identity, environment := testIdentity(t, t.TempDir())
+	environmentProto, err := environment.Proto()
+	require.NoError(t, err)
+
+	deployment := deployConfigMounts(t, identity, environmentProto, []ConfigMount{{
+		Name:      "skin",
+		ConfigMap: "frontend-skin",
+		MountPath: "/etc/codefly/skin",
+		Optional:  true,
+	}})
+
+	require.Contains(t, deployment, "            - name: skin\n              mountPath: /etc/codefly/skin\n              readOnly: true\n")
+	require.Contains(t, deployment, "        - name: skin\n          configMap:\n            name: frontend-skin\n            optional: true\n")
+}
+
+func TestDeployConfigMountsDeriveVolumeNamesAndRenderDeterministically(t *testing.T) {
+	identity, environment := testIdentity(t, t.TempDir())
+	// A fixed naming identity keeps two independent renders comparable, matching
+	// how the manifest guard checks determinism.
+	environment.NamingScope = ""
+	environmentProto, err := environment.Proto()
+	require.NoError(t, err)
+
+	mounts := []ConfigMount{
+		{ConfigMap: "frontend-skin", MountPath: "/etc/codefly/skin"},
+		{ConfigMap: "frontend-skin", MountPath: "/etc/codefly/skin-alt"},
+		{Name: "theme", ConfigMap: "frontend-theme", MountPath: "/etc/codefly/theme", Optional: true},
+	}
+
+	deployment := deployConfigMounts(t, identity, environmentProto, mounts)
+
+	// An empty name derives a DNS-1123 volume name from the ConfigMap, kept
+	// unique when the same ConfigMap is mounted twice.
+	require.Contains(t, deployment, "        - name: frontend-skin\n")
+	require.Contains(t, deployment, "        - name: frontend-skin-2\n")
+	require.Contains(t, deployment, "        - name: theme\n")
+	// Optional defaults to false and still renders explicitly.
+	require.Contains(t, deployment, "            optional: false\n")
+
+	require.Equal(t, deployment, deployConfigMounts(t, identity, environmentProto, mounts),
+		"config mount rendering must be deterministic across independent renders")
+}
+
+func deployConfigMounts(t *testing.T, identity *basev0.ServiceIdentity, environment *basev0.Environment, mounts []ConfigMount) string {
+	t.Helper()
+	ctx := context.Background()
 	builder := NewBuilder(NewService())
 	_, err := builder.Load(ctx, &builderv0.LoadRequest{
 		Identity:     identity,
 		CreationMode: &builderv0.CreationMode{Communicate: false},
 	})
 	require.NoError(t, err)
-	builder.Settings.ConfigMounts = []ConfigMount{{
-		Name:      "skin",
-		ConfigMap: "frontend-skin",
-		MountPath: "/etc/codefly/skin",
-		Optional:  true,
-	}}
-	environmentProto, err := environment.Proto()
-	require.NoError(t, err)
+	builder.Settings.ConfigMounts = mounts
 
 	destination := t.TempDir()
 	response, err := builder.Deploy(ctx, &builderv0.DeploymentRequest{
-		Environment: environmentProto,
+		Environment: environment,
 		Deployment: &builderv0.Deployment{
 			Kind: &builderv0.Deployment_Kubernetes{
 				Kubernetes: &builderv0.KubernetesDeployment{
@@ -203,10 +240,7 @@ func TestDeployRendersConfigMounts(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, builderv0.DeploymentStatus_SUCCESS, response.GetState().GetState())
 	require.Equal(t, builderv0.KubernetesManifestValidation_STATUS_PASSED, response.GetDeployment().GetKubernetes().GetValidation().GetStaticValidation())
-
-	deployment := readDeploymentFile(t, destination, "base", "deployment.yaml")
-	require.Contains(t, deployment, "            - name: skin\n              mountPath: /etc/codefly/skin\n              readOnly: true\n")
-	require.Contains(t, deployment, "        - name: skin\n          configMap:\n            name: frontend-skin\n            optional: true\n")
+	return readDeploymentFile(t, destination, "base", "deployment.yaml")
 }
 
 func readDeploymentFile(t *testing.T, destination string, elements ...string) string {
