@@ -103,8 +103,19 @@ spec:
               mountPath: /tmp
             - name: next-cache
               mountPath: /app/.next/cache
+{{- with .PodOverlay }}{{- range .ConfigMounts }}
+            - name: {{ .VolumeName }}
+              mountPath: {{ .MountPath }}
+              readOnly: {{ .ReadOnly }}
+{{- end }}{{- end }}
       volumes:
         - name: tmp
           emptyDir: {}
         - name: next-cache
           emptyDir: {}
+{{- with .PodOverlay }}{{- range .ConfigMounts }}
+        - name: {{ .VolumeName }}
+          configMap:
+            name: {{ .ConfigMapName }}
+            optional: {{ .Optional }}
+{{- end }}{{- end }}

@@ -19,7 +19,26 @@ import (
 	"github.com/codefly-dev/core/wool"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/reflect/protoreflect"
+	"gopkg.in/yaml.v3"
 )
+
+func TestConfigMountsParseFromSpec(t *testing.T) {
+	spec := `
+config-mounts:
+  - name: skin
+    config-map: frontend-skin
+    mount-path: /etc/codefly/skin
+    optional: true
+`
+	var settings Settings
+	require.NoError(t, yaml.Unmarshal([]byte(spec), &settings))
+	require.Equal(t, []ConfigMount{{
+		Name:      "skin",
+		ConfigMap: "frontend-skin",
+		MountPath: "/etc/codefly/skin",
+		Optional:  true,
+	}}, settings.ConfigMounts)
+}
 
 func TestAgentInformationAdvertisesValidationContract(t *testing.T) {
 	info, err := NewService().GetAgentInformation(context.Background(), nil)

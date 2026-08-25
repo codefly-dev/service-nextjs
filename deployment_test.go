@@ -165,6 +165,50 @@ func TestDeployProfiles(t *testing.T) {
 	}
 }
 
+func TestDeployRendersConfigMounts(t *testing.T) {
+	ctx := context.Background()
+	identity, environment := testIdentity(t, t.TempDir())
+	builder := NewBuilder(NewService())
+	_, err := builder.Load(ctx, &builderv0.LoadRequest{
+		Identity:     identity,
+		CreationMode: &builderv0.CreationMode{Communicate: false},
+	})
+	require.NoError(t, err)
+	builder.Settings.ConfigMounts = []ConfigMount{{
+		Name:      "skin",
+		ConfigMap: "frontend-skin",
+		MountPath: "/etc/codefly/skin",
+		Optional:  true,
+	}}
+	environmentProto, err := environment.Proto()
+	require.NoError(t, err)
+
+	destination := t.TempDir()
+	response, err := builder.Deploy(ctx, &builderv0.DeploymentRequest{
+		Environment: environmentProto,
+		Deployment: &builderv0.Deployment{
+			Kind: &builderv0.Deployment_Kubernetes{
+				Kubernetes: &builderv0.KubernetesDeployment{
+					Namespace:   "codefly-test",
+					Destination: destination,
+					BuildContext: &builderv0.DockerBuildContext{
+						DockerRepository: "registry.example.com",
+						ImageDigest:      "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+					},
+					Profile: builderv0.KubernetesOutputProfile_KUBERNETES_OUTPUT_PROFILE_RESTRICTED_PORTABLE_V1,
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, builderv0.DeploymentStatus_SUCCESS, response.GetState().GetState())
+	require.Equal(t, builderv0.KubernetesManifestValidation_STATUS_PASSED, response.GetDeployment().GetKubernetes().GetValidation().GetStaticValidation())
+
+	deployment := readDeploymentFile(t, destination, "base", "deployment.yaml")
+	require.Contains(t, deployment, "            - name: skin\n              mountPath: /etc/codefly/skin\n              readOnly: true\n")
+	require.Contains(t, deployment, "        - name: skin\n          configMap:\n            name: frontend-skin\n            optional: true\n")
+}
+
 func readDeploymentFile(t *testing.T, destination string, elements ...string) string {
 	t.Helper()
 	content, err := os.ReadFile(filepath.Join(append([]string{destination}, elements...)...))
