@@ -58,6 +58,27 @@ type Settings struct {
 	// Field named RuntimeImage (not DockerImage) to avoid colliding with
 	// services.Base.DockerImage(req) which is the build-time image method.
 	RuntimeImage string `yaml:"docker-image"`
+
+	// ConfigMounts project ConfigMaps as read-only files into the deployed
+	// pod — the file-based config seam, as opposed to envFrom which only
+	// exposes ConfigMap keys as environment variables. The ConfigMap is named,
+	// not created here, so it can be supplied out-of-band per environment.
+	ConfigMounts []ConfigMount `yaml:"config-mounts,omitempty"`
+}
+
+// ConfigMount is the spec.config-mounts entry mapped onto core's typed
+// services.ConfigMount for rendering.
+type ConfigMount struct {
+	// Name becomes the pod volume name and so must be a DNS-1123 label
+	// (lowercase alphanumeric and '-'); left empty it is derived from ConfigMap.
+	Name string `yaml:"name"`
+	// ConfigMap is the ConfigMap projected into the pod. It is named, not
+	// created here, so it can be supplied out-of-band per environment.
+	ConfigMap string `yaml:"config-map"`
+	// MountPath must be an absolute container path.
+	MountPath string `yaml:"mount-path"`
+	// Optional lets the pod start even when the ConfigMap is absent.
+	Optional bool `yaml:"optional,omitempty"`
 }
 
 type NextExecutionProfile string

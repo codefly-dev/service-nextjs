@@ -442,12 +442,32 @@ func (s *Builder) Deploy(ctx context.Context, req *builderv0.DeploymentRequest) 
 	return s.Builder.DeployKustomize(ctx, req, services.KustomizeDeployment{
 		EnvironmentVariables: s.EnvironmentVariables,
 		Templates:            deploymentFS,
+		PodOverlay:           s.podOverlay(),
 		Inputs: services.DeploymentInputs{
 			OwnEndpoints:             true,
 			DependencyEndpoints:      true,
 			DependencyConfigurations: true,
 		},
 	})
+}
+
+// podOverlay maps spec.config-mounts onto core's typed pod overlay. It returns
+// nil when no mounts are configured so the deployment renders unchanged; core
+// derives volume names and defaults each mount to read-only.
+func (s *Builder) podOverlay() *services.PodTemplateOverlay {
+	if len(s.Settings.ConfigMounts) == 0 {
+		return nil
+	}
+	mounts := make([]services.ConfigMount, len(s.Settings.ConfigMounts))
+	for i, mount := range s.Settings.ConfigMounts {
+		mounts[i] = services.ConfigMount{
+			ConfigMapName: mount.ConfigMap,
+			MountPath:     mount.MountPath,
+			Optional:      mount.Optional,
+			VolumeName:    mount.Name,
+		}
+	}
+	return &services.PodTemplateOverlay{ConfigMounts: mounts}
 }
 
 func (s *Builder) Options() []*agentv0.Question {
