@@ -78,6 +78,50 @@ func TestBuildEmitsRecipeWhenOutputDirectorySet(t *testing.T) {
 	require.NoError(t, services.VerifyDockerBuildPlan(output, plan))
 }
 
+// Declared build-args must reach the CLI-owned docker build: the emitted recipe
+// carries them (so the CLI passes each with --build-arg) and the rendered
+// Dockerfile declares each as an ARG promoted to an ENV so `next build` reads it.
+// Without this, FRONTEND_SKIN_RUNTIME never reaches the build and Next statically
+// prerenders the compiled default.
+func TestBuildRecipeCarriesDeclaredBuildArgs(t *testing.T) {
+	ctx := context.Background()
+	identity, _ := testIdentity(t, t.TempDir())
+
+	builder := NewBuilder(NewService())
+	_, err := builder.Load(ctx, &builderv0.LoadRequest{
+		Identity:     identity,
+		CreationMode: &builderv0.CreationMode{Communicate: false},
+	})
+	require.NoError(t, err)
+	builder.Settings.BuildArgs = map[string]string{"FRONTEND_SKIN_RUNTIME": "1"}
+
+	output := t.TempDir()
+	response, err := builder.Build(ctx, &builderv0.BuildRequest{
+		OutputDirectory: output,
+		BuildContext: &builderv0.BuildContext{
+			Kind: &builderv0.BuildContext_DockerBuildContext{
+				DockerBuildContext: &builderv0.DockerBuildContext{
+					DockerRepository: "registry.example.com",
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	plan := response.GetResult().GetDockerBuildPlan()
+	require.NotNil(t, plan)
+	require.Len(t, plan.GetRecipes(), 1)
+	require.Equal(t, map[string]string{"FRONTEND_SKIN_RUNTIME": "1"}, plan.GetRecipes()[0].GetBuildArgs())
+
+	dockerfile, err := os.ReadFile(filepath.Join(output, "Dockerfile"))
+	require.NoError(t, err)
+	require.Contains(t, string(dockerfile), "ARG FRONTEND_SKIN_RUNTIME")
+	require.Contains(t, string(dockerfile), "ENV FRONTEND_SKIN_RUNTIME=$FRONTEND_SKIN_RUNTIME")
+
+	// The plan the CLI verifies must still match the emitted tree.
+	require.NoError(t, services.VerifyDockerBuildPlan(output, plan))
+}
+
 // With no output_directory, Build keeps the legacy in-process path: it renders
 // the Dockerfile into the service's builder/ dir and runs docker build; it never
 // emits a recipe plan. An empty PATH makes the buildx probe fail fast, so the

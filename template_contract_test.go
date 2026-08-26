@@ -170,6 +170,52 @@ func TestBuilderTemplateInstallsWorkspaceGraphReproducibly(t *testing.T) {
 	}
 }
 
+func TestBuilderTemplateRendersDeclaredBuildArgsBeforeBuild(t *testing.T) {
+	t.Parallel()
+
+	dockerfile, err := fs.ReadFile(builderFS, "templates/builder/Dockerfile.tmpl")
+	if err != nil {
+		t.Fatalf("read Dockerfile template: %v", err)
+	}
+	parsed, err := template.New("Dockerfile").Parse(string(dockerfile))
+	if err != nil {
+		t.Fatalf("parse Dockerfile template: %v", err)
+	}
+
+	// With build-args declared, each becomes an ARG promoted to an ENV, ahead of
+	// the build step so `next build` reads it.
+	rendered := &bytes.Buffer{}
+	if err := parsed.Execute(rendered, DockerTemplating{
+		NodeImage: NodeImage,
+		BuildArgs: []string{"FRONTEND_SKIN_RUNTIME", "OTHER_FLAG"},
+	}); err != nil {
+		t.Fatalf("render Dockerfile template: %v", err)
+	}
+	out := rendered.String()
+	for _, required := range []string{
+		"ARG FRONTEND_SKIN_RUNTIME",
+		"ENV FRONTEND_SKIN_RUNTIME=$FRONTEND_SKIN_RUNTIME",
+		"ARG OTHER_FLAG",
+		"ENV OTHER_FLAG=$OTHER_FLAG",
+	} {
+		if !strings.Contains(out, required) {
+			t.Fatalf("rendered Dockerfile missing %q:\n%s", required, out)
+		}
+	}
+	if strings.Index(out, "ARG FRONTEND_SKIN_RUNTIME") > strings.Index(out, "npm run build") {
+		t.Fatal("build-args must be declared before the build step")
+	}
+
+	// With no build-args declared, no stray ARG/ENV is emitted.
+	bare := &bytes.Buffer{}
+	if err := parsed.Execute(bare, DockerTemplating{NodeImage: NodeImage}); err != nil {
+		t.Fatalf("render Dockerfile template: %v", err)
+	}
+	if strings.Contains(bare.String(), "\nARG ") {
+		t.Fatalf("no build-args declared, but Dockerfile emitted an ARG:\n%s", bare.String())
+	}
+}
+
 func TestHealthProbePathIsScaffoldedAsARouteHandler(t *testing.T) {
 	t.Parallel()
 
