@@ -285,6 +285,10 @@ func generatedFiles(root string) (map[string]generatedFile, error) {
 type DockerTemplating struct {
 	NodeImage string
 	Static    bool
+	// BuildArgs are the declared build-arg names, sorted. The Dockerfile declares
+	// each as an ARG and promotes it to an ENV in the build stage so `next build`
+	// reads it; the value is supplied at build time via --build-arg.
+	BuildArgs []string
 }
 
 // NodeImage matches the tested SaaS Starter frontend build substrate. Keeping
@@ -311,6 +315,7 @@ func (s *Builder) Build(ctx context.Context, req *builderv0.BuildRequest) (*buil
 	docker := DockerTemplating{
 		NodeImage: NodeImage,
 		Static:    s.Settings.IsStatic(),
+		BuildArgs: s.Settings.BuildArgKeys(),
 	}
 
 	if output := req.GetOutputDirectory(); output != "" {
@@ -372,6 +377,7 @@ func (s *Builder) buildRecipe(ctx context.Context, docker DockerTemplating, imag
 		Dockerignore: "dockerignore",
 		Image:        image.FullName(),
 		Platforms:    []string{"linux/amd64", "linux/arm64"},
+		BuildArgs:    s.Settings.BuildArgs,
 	}
 	plan, err := services.BuildDockerBuildPlan(output, []*builderv0.DockerBuildRecipe{recipe})
 	if err != nil {

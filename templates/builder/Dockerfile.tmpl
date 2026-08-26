@@ -27,6 +27,10 @@ RUN rm -rf node_modules
 COPY --from=deps /app/node_modules ./node_modules
 
 ENV NEXT_TELEMETRY_DISABLED=1
+{{range .BuildArgs}}
+ARG {{.}}
+ENV {{.}}=${{.}}
+{{- end}}
 
 RUN mkdir -p public && npm run build
 

@@ -5,6 +5,7 @@ import (
 	"embed"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -64,6 +65,26 @@ type Settings struct {
 	// exposes ConfigMap keys as environment variables. The ConfigMap is named,
 	// not created here, so it can be supplied out-of-band per environment.
 	ConfigMounts []ConfigMount `yaml:"config-mounts,omitempty"`
+
+	// BuildArgs are Docker build arguments the application build needs. Each is
+	// declared as an ARG in the generated Dockerfile and promoted to an ENV so
+	// `next build` reads it — e.g. FRONTEND_SKIN_RUNTIME=1 to keep the SSR skin
+	// resolver active instead of statically prerendering the compiled default.
+	// They are carried in the emitted build recipe so the CLI-owned docker build
+	// passes each with --build-arg.
+	BuildArgs map[string]string `yaml:"build-args,omitempty"`
+}
+
+// BuildArgKeys returns the declared build-arg names in sorted order, so the
+// generated Dockerfile and the emitted recipe are deterministic regardless of
+// map iteration order.
+func (s *Settings) BuildArgKeys() []string {
+	keys := make([]string, 0, len(s.BuildArgs))
+	for key := range s.BuildArgs {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // ConfigMount is the spec.config-mounts entry mapped onto core's typed
