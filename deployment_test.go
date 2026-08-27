@@ -181,6 +181,56 @@ func TestDeployRendersConfigMounts(t *testing.T) {
 	require.Contains(t, deployment, "        - name: skin\n          configMap:\n            name: frontend-skin\n            optional: true\n")
 }
 
+func TestDeployRendersSpecEnvironmentAsContainerEnv(t *testing.T) {
+	ctx := context.Background()
+	identity, environment := testIdentity(t, t.TempDir())
+	environmentProto, err := environment.Proto()
+	require.NoError(t, err)
+
+	builder := NewBuilder(NewService())
+	_, err = builder.Load(ctx, &builderv0.LoadRequest{
+		Identity:     identity,
+		CreationMode: &builderv0.CreationMode{Communicate: false},
+	})
+	require.NoError(t, err)
+	builder.Settings.Environment = map[string]string{"FRONTEND_SKIN_DIR": "/etc/codefly/skin"}
+
+	destination := t.TempDir()
+	response, err := builder.Deploy(ctx, &builderv0.DeploymentRequest{
+		Environment: environmentProto,
+		Deployment: &builderv0.Deployment{
+			Kind: &builderv0.Deployment_Kubernetes{
+				Kubernetes: &builderv0.KubernetesDeployment{
+					Namespace:   "codefly-test",
+					Destination: destination,
+					BuildContext: &builderv0.DockerBuildContext{
+						DockerRepository: "registry.example.com",
+						ImageDigest:      "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+					},
+					Profile: builderv0.KubernetesOutputProfile_KUBERNETES_OUTPUT_PROFILE_RESTRICTED_PORTABLE_V1,
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, builderv0.DeploymentStatus_SUCCESS, response.GetState().GetState())
+
+	// The env var lands in the deploy ConfigMap, which the container consumes
+	// through the base deployment's envFrom.
+	configMap := readDeploymentFile(t, destination, "overlays", environment.Name, "configmap.yaml")
+	require.Contains(t, configMap, "FRONTEND_SKIN_DIR: \"/etc/codefly/skin\"")
+
+	// The entry must go into the per-deploy scoped manager, never the
+	// service-wide manager the runtime reads via All() — otherwise a deploy
+	// would leak spec.environment into a later local run.
+	all, err := builder.EnvironmentVariables.All()
+	require.NoError(t, err)
+	for _, env := range all {
+		require.NotEqual(t, "FRONTEND_SKIN_DIR", env.Key,
+			"spec.environment must not leak into the service-wide env manager")
+	}
+}
+
 func TestDeployConfigMountsDeriveVolumeNamesAndRenderDeterministically(t *testing.T) {
 	identity, environment := testIdentity(t, t.TempDir())
 	// A fixed naming identity keeps two independent renders comparable, matching

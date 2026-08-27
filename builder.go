@@ -454,7 +454,21 @@ func (s *Builder) Deploy(ctx context.Context, req *builderv0.DeploymentRequest) 
 			DependencyEndpoints:      true,
 			DependencyConfigurations: true,
 		},
+		Prepare: s.addSpecEnvironment,
 	})
+}
+
+// addSpecEnvironment feeds spec.environment into the deployment-scoped env
+// manager so entries render into the deploy ConfigMap and reach the container
+// through envFrom. It writes to the per-deploy scoped clone core hands us, not
+// the service-wide s.EnvironmentVariables the runtime also reads, so a deploy
+// never leaks these into a later local run and repeated deploys never
+// accumulate duplicates.
+func (s *Builder) addSpecEnvironment(ctx context.Context, deployment *services.KustomizeDeploymentContext) error {
+	for _, key := range s.Settings.EnvironmentKeys() {
+		deployment.EnvironmentVariables.AddEnvironmentVariable(ctx, key, s.Settings.Environment[key])
+	}
+	return nil
 }
 
 // podOverlay maps spec.config-mounts onto core's typed pod overlay. It returns
