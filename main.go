@@ -73,6 +73,24 @@ type Settings struct {
 	// They are carried in the emitted build recipe so the CLI-owned docker build
 	// passes each with --build-arg.
 	BuildArgs map[string]string `yaml:"build-args,omitempty"`
+
+	// Environment declares plain container environment variables. Each entry is
+	// fed into the env manager as KEY=VAL (no CODEFLY__ prefix) so it renders
+	// into the deploy ConfigMap and reaches the container through envFrom — the
+	// env-var seam, as opposed to ConfigMounts which projects files.
+	Environment map[string]string `yaml:"environment,omitempty"`
+}
+
+// EnvironmentKeys returns the declared environment-variable names in sorted
+// order so entries feed into the env manager deterministically regardless of
+// map iteration order.
+func (s *Settings) EnvironmentKeys() []string {
+	keys := make([]string, 0, len(s.Environment))
+	for key := range s.Environment {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // BuildArgKeys returns the declared build-arg names in sorted order, so the

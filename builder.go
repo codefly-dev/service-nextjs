@@ -445,6 +445,10 @@ func (s *Builder) Deploy(ctx context.Context, req *builderv0.DeploymentRequest) 
 	defer s.Wool.Catch()
 	ctx = s.Wool.Inject(ctx)
 
+	for _, key := range s.Settings.EnvironmentKeys() {
+		s.EnvironmentVariables.AddEnvironmentVariable(ctx, key, s.Settings.Environment[key])
+	}
+
 	return s.Builder.DeployKustomize(ctx, req, services.KustomizeDeployment{
 		EnvironmentVariables: s.EnvironmentVariables,
 		Templates:            deploymentFS,
