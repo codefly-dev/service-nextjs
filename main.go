@@ -82,8 +82,9 @@ type Settings struct {
 }
 
 // EnvironmentKeys returns the declared environment-variable names in sorted
-// order so entries feed into the env manager deterministically regardless of
-// map iteration order.
+// order so entries feed into the env manager in a stable order. The rendered
+// ConfigMap is already deterministic — its template sorts map keys — so this
+// only fixes the feed order, matching the BuildArgKeys convention.
 func (s *Settings) EnvironmentKeys() []string {
 	keys := make([]string, 0, len(s.Environment))
 	for key := range s.Environment {

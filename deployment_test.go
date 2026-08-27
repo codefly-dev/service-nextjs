@@ -216,12 +216,19 @@ func TestDeployRendersSpecEnvironmentAsContainerEnv(t *testing.T) {
 	require.Equal(t, builderv0.DeploymentStatus_SUCCESS, response.GetState().GetState())
 
 	// The env var lands in the deploy ConfigMap, which the container consumes
-	// through envFrom in the base deployment.
+	// through the base deployment's envFrom.
 	configMap := readDeploymentFile(t, destination, "overlays", environment.Name, "configmap.yaml")
 	require.Contains(t, configMap, "FRONTEND_SKIN_DIR: \"/etc/codefly/skin\"")
 
-	deployment := readDeploymentFile(t, destination, "base", "deployment.yaml")
-	require.Contains(t, deployment, "- configMapRef:\n                name: frontend-config")
+	// The entry must go into the per-deploy scoped manager, never the
+	// service-wide manager the runtime reads via All() — otherwise a deploy
+	// would leak spec.environment into a later local run.
+	all, err := builder.EnvironmentVariables.All()
+	require.NoError(t, err)
+	for _, env := range all {
+		require.NotEqual(t, "FRONTEND_SKIN_DIR", env.Key,
+			"spec.environment must not leak into the service-wide env manager")
+	}
 }
 
 func TestDeployConfigMountsDeriveVolumeNamesAndRenderDeterministically(t *testing.T) {
