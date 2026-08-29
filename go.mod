@@ -4,7 +4,7 @@ go 1.27.0
 
 require (
 	github.com/Masterminds/semver v1.5.0
-	github.com/codefly-dev/core v0.3.10
+	github.com/codefly-dev/core v0.3.11
 	github.com/stretchr/testify v1.11.1
 	google.golang.org/grpc v1.83.0
 	google.golang.org/protobuf v1.36.12
