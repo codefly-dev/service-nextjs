@@ -2,13 +2,19 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/codefly-dev/core/agents"
 	"github.com/codefly-dev/core/ciinputs"
 	agentv0 "github.com/codefly-dev/core/generated/go/codefly/services/agent/v0"
+	builderv0 "github.com/codefly-dev/core/generated/go/codefly/services/builder/v0"
 	"github.com/codefly-dev/core/resources"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
@@ -23,11 +29,17 @@ func inputsFixture(t *testing.T) (*Service, agentv0.AgentClient) {
 	t.Helper()
 	root := t.TempDir()
 	service := NewService()
-	service.Identity = &resources.ServiceIdentity{WorkspacePath: root, Module: "app", Name: "web"}
 	service.Location = root
-	service.Service = &resources.Service{ServiceDependencies: []*resources.ServiceDependency{{Name: "api"}}}
-	service.setSourceLocation(filepath.Join(root, "code"))
-	inputWrite(t, root, "code/package.json", `{ "scripts": {"test": "custom-runner"} }`)
+	service.Identity = &resources.ServiceIdentity{WorkspacePath: root, Module: "app", Name: "web"}
+	t.Setenv(agents.WorkDirEnvironment, root)
+	declaration := &resources.Service{Name: "web", Version: "0.0.0", ServiceDependencies: []*resources.ServiceDependency{{Name: "api"}}, Spec: map[string]any{"docker-image": "sha256:" + strings.Repeat("0", 64)}}
+	require.NoError(t, declaration.SaveAtDir(context.Background(), root))
+	inputWrite(t, root, "code/package.json", `{"scripts":{"test":"custom-runner"}}`)
+	return service, inputClient(t, service)
+}
+
+func inputClient(t *testing.T, service *Service) agentv0.AgentClient {
+	t.Helper()
 	listener := bufconn.Listen(1024 * 1024)
 	server := grpc.NewServer()
 	agentv0.RegisterAgentServer(server, service)
@@ -36,7 +48,7 @@ func inputsFixture(t *testing.T) (*Service, agentv0.AgentClient) {
 	conn, err := grpc.NewClient("passthrough:///inputs", grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) { return listener.Dial() }))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = conn.Close() })
-	return service, agentv0.NewAgentClient(conn)
+	return agentv0.NewAgentClient(conn)
 }
 
 func inputWrite(t *testing.T, root, name, content string) {
@@ -68,96 +80,138 @@ func pathInput(t *testing.T, task *agentv0.TaskInputs, name string) *agentv0.Eff
 	return nil
 }
 
-func TestEffectiveInputsRPCPreservesInventoryAndDependencyModes(t *testing.T) {
-	service, client := inputsFixture(t)
-	inputWrite(t, service.Location, "code/src/production.test.ts", "export const value = 1")
-	req := &agentv0.GetEffectiveInputsRequest{SchemaVersion: 1, Snapshot: "candidate", Context: []*agentv0.EffectiveInput{
-		{Kind: agentv0.EffectiveInputKind_EFFECTIVE_INPUT_KIND_SERVICE_IMPLEMENTATION, Owner: "app/api", Name: "implementation", Identity: inputContentIdentity([]byte("api"))},
-		{Kind: agentv0.EffectiveInputKind_EFFECTIVE_INPUT_KIND_SERVICE_IMPLEMENTATION, Owner: "app/database", Name: "implementation", Identity: inputContentIdentity([]byte("db"))},
-		{Kind: agentv0.EffectiveInputKind_EFFECTIVE_INPUT_KIND_GENERATED_CONTRACT, Owner: "app/api", Name: "contract", Identity: inputContentIdentity([]byte("contract"))},
-	}}
-	response, err := client.GetEffectiveInputs(context.Background(), req)
+func inputContentIdentity(data []byte) *agentv0.EffectiveIdentity {
+	sum := sha256.Sum256(data)
+	return &agentv0.EffectiveIdentity{Kind: agentv0.EffectiveIdentityKind_EFFECTIVE_IDENTITY_KIND_SHA256, Digest: hex.EncodeToString(sum[:])}
+}
+
+func TestEffectiveInputsHeadlessCoreDiscovery(t *testing.T) {
+	loaded, _ := inputsFixture(t)
+	cold := NewService()
+	client := inputClient(t, cold)
+	info, err := client.GetAgentInformation(context.Background(), &agentv0.AgentInformationRequest{})
 	require.NoError(t, err)
-	require.Equal(t, req.Snapshot, response.Snapshot)
-	required, err := ciinputs.Required(nextValidationCapabilities())
+	require.Equal(t, []uint32{1}, info.EffectiveInputsVersions)
+	require.True(t, proto.Equal(nextValidationCapabilities(), info.Validation))
+	required, err := ciinputs.Required(info.Validation)
 	require.NoError(t, err)
-	require.Len(t, response.Tasks, len(required))
-	evaluated, err := ciinputs.Evaluate(response, req, required)
+	req := &agentv0.GetEffectiveInputsRequest{SchemaVersion: 1, Snapshot: "headless"}
+	tasks, err := ciinputs.Discover(context.Background(), client, info, req, required)
 	require.NoError(t, err)
-	for _, task := range evaluated {
+	require.Len(t, tasks, len(required))
+	for _, task := range tasks {
+		require.NotNil(t, task.Declaration)
+		name := "code/package.json"
+		if task.Key.Phase == agentv0.TaskPhase_TASK_PHASE_SBOM {
+			name = "service.codefly.yaml"
+		}
+		require.NotEmpty(t, pathInput(t, task.Declaration, name))
 		require.True(t, task.Conservative)
 		require.False(t, task.CacheEligible)
 	}
-	for _, suite := range []string{"unit", "pure", "integration", "e2e", "smoke"} {
-		task := inputTask(t, response, agentv0.TaskPhase_TASK_PHASE_TEST, suite)
-		if suite == "pure" {
-			require.Empty(t, task.RuntimeServices)
-		} else {
-			require.Contains(t, task.RuntimeServices, "app/api")
+	require.Nil(t, cold.Identity)
+	require.Empty(t, cold.currentSourceLocation())
+	require.FileExists(t, filepath.Join(loaded.Location, "code/package.json"))
+}
+
+func TestEffectiveInputsDoesNotHashSecretsOrSymlinkTargets(t *testing.T) {
+	service, client := inputsFixture(t)
+	require.NoError(t, os.Remove(filepath.Join(service.Location, "code/package.json")))
+	inputWrite(t, service.Location, "code/credentials/password", "123456")
+	inputWrite(t, service.Location, "code/.ignored-secret", "another-secret")
+	require.NoError(t, os.Symlink("credentials/password", filepath.Join(service.Location, "code/package.json")))
+	response, err := client.GetEffectiveInputs(context.Background(), &agentv0.GetEffectiveInputsRequest{SchemaVersion: 1, Snapshot: "secret"})
+	require.NoError(t, err)
+	for _, task := range response.Tasks {
+		if task.Task.Phase == agentv0.TaskPhase_TASK_PHASE_SBOM {
+			continue
 		}
-		if suite == "smoke" {
-			require.Contains(t, task.RuntimeServices, "app/web")
+		for _, name := range []string{"code/package.json", "code/credentials/password"} {
+			in := pathInput(t, task, name)
+			require.True(t, in.Sensitive)
+			require.Nil(t, in.Identity)
 		}
-		for _, in := range task.Inputs {
-			if in.Owner == "app/database" {
-				require.NotEqual(t, "pure", suite)
+	}
+	data, err := proto.Marshal(response)
+	require.NoError(t, err)
+	require.NotContains(t, string(data), "123456")
+	require.NotContains(t, string(data), inputContentIdentity([]byte("123456")).Digest)
+	require.NotContains(t, string(data), "another-secret")
+}
+
+func TestEffectiveInputsLargeTreeFitsRPC(t *testing.T) {
+	service, client := inputsFixture(t)
+	for i := 0; i < 4000; i++ {
+		inputWrite(t, service.Location, fmt.Sprintf("code/sources/module-%04d.ts", i), "export const value=1")
+	}
+	file, err := os.Create(filepath.Join(service.Location, "code/large-asset.bin"))
+	require.NoError(t, err)
+	require.NoError(t, file.Truncate(8<<30))
+	require.NoError(t, file.Close())
+	response, err := client.GetEffectiveInputs(context.Background(), &agentv0.GetEffectiveInputsRequest{SchemaVersion: 1, Snapshot: "large"})
+	require.NoError(t, err)
+	require.Less(t, proto.Size(response), inputResponseLimit)
+	require.Len(t, response.Tasks, 11)
+}
+
+func TestEffectiveInputsDependencyKindsAndFreshMetadata(t *testing.T) {
+	service, client := inputsFixture(t)
+	declaration, err := resources.LoadServiceFromDir(context.Background(), service.Location)
+	require.NoError(t, err)
+	for _, kind := range append(resources.DeclarableDependencyKinds(), resources.DependencyKindLegacy) {
+		declaration.ServiceDependencies = []*resources.ServiceDependency{{Name: "producer", Kind: kind}}
+		require.NoError(t, declaration.SaveAtDir(context.Background(), service.Location))
+		implementation := &agentv0.EffectiveInput{Kind: agentv0.EffectiveInputKind_EFFECTIVE_INPUT_KIND_SERVICE_IMPLEMENTATION, Owner: "app/producer", Name: "implementation", Identity: inputContentIdentity([]byte("api"))}
+		artifact := &agentv0.EffectiveInput{Kind: agentv0.EffectiveInputKind_EFFECTIVE_INPUT_KIND_ARTIFACT, Owner: "app/producer", Name: "artifact", Identity: inputContentIdentity([]byte("image"))}
+		response, err := client.GetEffectiveInputs(context.Background(), &agentv0.GetEffectiveInputsRequest{SchemaVersion: 1, Snapshot: string(kind) + "snapshot", Context: []*agentv0.EffectiveInput{implementation, artifact}})
+		require.NoError(t, err)
+		for _, suite := range []string{"unit", "pure", "integration", "e2e", "smoke"} {
+			task := inputTask(t, response, agentv0.TaskPhase_TASK_PHASE_TEST, suite)
+			if suite != "pure" && kind.Participates(resources.StageRun) {
+				require.Contains(t, task.RuntimeServices, "app/producer")
+				require.True(t, hasInput(task, implementation))
+			} else {
+				require.NotContains(t, task.RuntimeServices, "app/producer")
+				require.False(t, hasInput(task, implementation))
+			}
+			if suite == "smoke" {
+				require.Contains(t, task.RuntimeServices, "app/web")
 			}
 		}
-	}
-	artifact := inputTask(t, response, agentv0.TaskPhase_TASK_PHASE_ARTIFACT_BUILD, "")
-	require.Empty(t, artifact.RuntimeServices)
-	require.NotNil(t, pathInput(t, artifact, "code/src/production.test.ts").Identity)
-	for _, in := range artifact.Inputs {
-		require.NotEqual(t, agentv0.EffectiveInputKind_EFFECTIVE_INPUT_KIND_SERVICE_IMPLEMENTATION, in.Kind)
-	}
-}
-
-func TestEffectiveInputsRPCSnapshotChangesAndSecrets(t *testing.T) {
-	service, client := inputsFixture(t)
-	root := service.Location
-	inputWrite(t, root, "code/fixture.txt", "one")
-	inputWrite(t, root, "code/.env.local", "SECRET=do-not-emit")
-	inputWrite(t, root, "service.codefly.yaml", "secret: do-not-emit")
-	inputWrite(t, root, "code/package-lock.json", "{}")
-	require.NoError(t, os.Symlink("fixture.txt", filepath.Join(root, "code/link")))
-	discover := func(snapshot, revision string) *agentv0.GetEffectiveInputsResponse {
-		response, err := client.GetEffectiveInputs(context.Background(), &agentv0.GetEffectiveInputsRequest{SchemaVersion: 1, Snapshot: snapshot, Revision: revision})
-		require.NoError(t, err)
-		return response
-	}
-	before := discover("before", "")
-	artifact := inputTask(t, before, agentv0.TaskPhase_TASK_PHASE_ARTIFACT_BUILD, "")
-	require.EqualValues(t, 0120000, pathInput(t, artifact, "code/link").Mode)
-	require.Equal(t, inputContentIdentity([]byte("fixture.txt")), pathInput(t, artifact, "code/link").Identity)
-	require.True(t, pathInput(t, artifact, "code/.env.local").Sensitive)
-	require.Nil(t, pathInput(t, artifact, "code/.env.local").Identity)
-	encoded, err := proto.Marshal(before)
-	require.NoError(t, err)
-	require.NotContains(t, string(encoded), "do-not-emit")
-	for _, name := range []string{"code/fixture.txt", "code/package-lock.json", "code/next.config.js", "code/toolchain.lock", "code/packages/shared/index.ts"} {
-		inputWrite(t, root, name, "changed")
-		after := inputTask(t, discover(name, ""), agentv0.TaskPhase_TASK_PHASE_ARTIFACT_BUILD, "")
-		if name == "code/next.config.js" {
-			require.True(t, pathInput(t, after, name).Sensitive)
-			require.Nil(t, pathInput(t, after, name).Identity)
+		task := inputTask(t, response, agentv0.TaskPhase_TASK_PHASE_ARTIFACT_BUILD, "")
+		require.Empty(t, task.RuntimeServices)
+		require.False(t, hasInput(task, implementation))
+		if kind.Participates(resources.StageBuild) {
+			require.True(t, hasInput(task, artifact))
 		} else {
-			require.Equal(t, inputContentIdentity([]byte("changed")), pathInput(t, after, name).Identity)
+			require.False(t, hasInput(task, artifact))
 		}
 	}
-	require.NoError(t, os.Rename(filepath.Join(root, "code/fixture.txt"), filepath.Join(root, "code/moved.txt")))
-	after := inputTask(t, discover("renamed", ""), agentv0.TaskPhase_TASK_PHASE_ARTIFACT_BUILD, "")
-	for _, in := range after.Inputs {
-		require.NotEqual(t, "code/fixture.txt", in.Name)
+}
+
+func TestEffectiveInputsProtectedContextAndHistory(t *testing.T) {
+	_, client := inputsFixture(t)
+	protected, err := ciinputs.Protect([]byte("01234567890123456789012345678901"), "key-v1", []byte("secret"))
+	require.NoError(t, err)
+	in := &agentv0.EffectiveInput{Kind: agentv0.EffectiveInputKind_EFFECTIVE_INPUT_KIND_CONFIGURATION, Owner: "app/web", Name: "service.codefly.yaml", Path: true, Mode: 0100644, Sensitive: true, Identity: protected}
+	req := &agentv0.GetEffectiveInputsRequest{SchemaVersion: 1, Snapshot: "s", Context: []*agentv0.EffectiveInput{in}}
+	response, err := client.GetEffectiveInputs(context.Background(), req)
+	require.NoError(t, err)
+	for _, task := range response.Tasks {
+		require.True(t, proto.Equal(in, pathInput(t, task, in.Name)))
 	}
-	require.NotNil(t, pathInput(t, after, "code/moved.txt"))
-	historical := discover("reference", "HEAD~1")
-	for _, task := range historical.Tasks {
+	req.Revision = "HEAD~1"
+	response, err = client.GetEffectiveInputs(context.Background(), req)
+	require.NoError(t, err)
+	require.Equal(t, req.Snapshot, response.Snapshot)
+	for _, task := range response.Tasks {
 		require.False(t, task.Complete)
 		require.Empty(t, task.Inputs)
+		require.Empty(t, task.RuntimeServices)
 	}
 }
 
-func TestEffectiveInputsRPCRejectsInvalidContextAndVersions(t *testing.T) {
+func TestEffectiveInputsInvalidRequests(t *testing.T) {
 	_, client := inputsFixture(t)
 	for _, tc := range []struct {
 		req  *agentv0.GetEffectiveInputsRequest
@@ -165,81 +219,110 @@ func TestEffectiveInputsRPCRejectsInvalidContextAndVersions(t *testing.T) {
 	}{
 		{&agentv0.GetEffectiveInputsRequest{SchemaVersion: 2, Snapshot: "s"}, codes.Unimplemented},
 		{&agentv0.GetEffectiveInputsRequest{SchemaVersion: 1}, codes.InvalidArgument},
-		{&agentv0.GetEffectiveInputsRequest{SchemaVersion: 1, Snapshot: "s", Context: []*agentv0.EffectiveInput{{Kind: agentv0.EffectiveInputKind_EFFECTIVE_INPUT_KIND_ENVIRONMENT, Owner: "app/web", Name: "secret", Sensitive: true, Identity: inputContentIdentity([]byte("secret"))}}}, codes.InvalidArgument},
+		{&agentv0.GetEffectiveInputsRequest{SchemaVersion: 1, Snapshot: "s", Context: []*agentv0.EffectiveInput{{Kind: agentv0.EffectiveInputKind_EFFECTIVE_INPUT_KIND_ENVIRONMENT, Owner: "web", Name: "secret", Sensitive: true, Identity: inputContentIdentity([]byte("secret"))}}}, codes.InvalidArgument},
 	} {
 		_, err := client.GetEffectiveInputs(context.Background(), tc.req)
 		require.Equal(t, tc.code, status.Code(err))
 	}
 }
 
-func TestEffectiveInputsProtectedContextAndLegacyAdvertisement(t *testing.T) {
-	service, client := inputsFixture(t)
-	inputWrite(t, service.Location, "code/.env.local", "SECRET=private")
-	protected, err := ciinputs.Protect([]byte("01234567890123456789012345678901"), "test/key-v1", []byte("SECRET=private"))
+func hasInput(task *agentv0.TaskInputs, want *agentv0.EffectiveInput) bool {
+	for _, in := range task.Inputs {
+		if proto.Equal(in, want) {
+			return true
+		}
+	}
+	return false
+}
+
+func TestEffectiveInputsOutputBudgets(t *testing.T) {
+	output := inputOutput{}
+	n, err := output.Write(make([]byte, nativeOutputLimit))
 	require.NoError(t, err)
-	in := &agentv0.EffectiveInput{Kind: agentv0.EffectiveInputKind_EFFECTIVE_INPUT_KIND_ENVIRONMENT, Owner: "app/web", Name: "code/.env.local", Sensitive: true, Path: true, Mode: 0100644, Identity: protected}
-	req := &agentv0.GetEffectiveInputsRequest{SchemaVersion: 1, Snapshot: "protected", Context: []*agentv0.EffectiveInput{in}}
+	require.Equal(t, nativeOutputLimit, n)
+	n, err = output.Write([]byte("overflow"))
+	require.Error(t, err)
+	require.Zero(t, n)
+	require.Len(t, output.data, nativeOutputLimit)
+	_, client := inputsFixture(t)
+	_, err = client.GetEffectiveInputs(context.Background(), &agentv0.GetEffectiveInputsRequest{SchemaVersion: 1, Snapshot: strings.Repeat("s", nativeOutputLimit+1)})
+	require.Equal(t, codes.ResourceExhausted, status.Code(err))
+	req := &agentv0.GetEffectiveInputsRequest{SchemaVersion: 1, Snapshot: "bounded-response", Context: []*agentv0.EffectiveInput{{Kind: agentv0.EffectiveInputKind_EFFECTIVE_INPUT_KIND_SERVICE_IMPLEMENTATION, Owner: "app/api", Name: "implementation", Identity: &agentv0.EffectiveIdentity{Kind: agentv0.EffectiveIdentityKind_EFFECTIVE_IDENTITY_KIND_VERSIONED, Namespace: "fixture/v1", Digest: strings.Repeat("x", nativeOutputLimit-256)}}}}
+	require.LessOrEqual(t, proto.Size(req), nativeOutputLimit)
 	response, err := client.GetEffectiveInputs(context.Background(), req)
 	require.NoError(t, err)
+	require.LessOrEqual(t, proto.Size(response), inputResponseLimit)
+	require.Len(t, response.Tasks, 11)
 	for _, task := range response.Tasks {
-		require.True(t, proto.Equal(in, pathInput(t, task, in.Name)))
+		require.Empty(t, task.Inputs)
+		require.False(t, task.Complete)
+	}
+
+}
+
+func TestEffectiveInputsCompleteSBOMThroughCore(t *testing.T) {
+	service, client := inputsFixture(t)
+	t.Setenv("CODEFLY_PROVIDER_ARTIFACT_DIGEST", "sha256:"+strings.Repeat("a", 64))
+	lock := `{"name":"web","version":"1.0.0","lockfileVersion":3,"packages":{"":{"name":"web","version":"1.0.0"}}}`
+	inputWrite(t, service.Location, "code/package-lock.json", lock)
+	req := &agentv0.GetEffectiveInputsRequest{SchemaVersion: 1, Snapshot: "before", Context: []*agentv0.EffectiveInput{{Kind: agentv0.EffectiveInputKind_EFFECTIVE_INPUT_KIND_CONFIGURATION, Owner: "app/web", Name: "sbom/options", Identity: &agentv0.EffectiveIdentity{Kind: agentv0.EffectiveIdentityKind_EFFECTIVE_IDENTITY_KIND_VERSIONED, Namespace: "codefly.nextjs.sbom-options/v1", Digest: "include-dev=false"}}}}
+	for _, file := range []struct {
+		name string
+		kind agentv0.EffectiveInputKind
+	}{{"service.codefly.yaml", agentv0.EffectiveInputKind_EFFECTIVE_INPUT_KIND_CONFIGURATION}, {"code/package-lock.json", agentv0.EffectiveInputKind_EFFECTIVE_INPUT_KIND_LOCKFILE}} {
+		data, err := os.ReadFile(filepath.Join(service.Location, file.name))
+		require.NoError(t, err)
+		identity, err := ciinputs.Protect([]byte("01234567890123456789012345678901"), "fixture/key-v1", data)
+		require.NoError(t, err)
+		req.Context = append(req.Context, &agentv0.EffectiveInput{Kind: file.kind, Owner: "app/web", Name: file.name, Path: true, Mode: 0100644, Sensitive: true, Identity: identity})
 	}
 	info, err := client.GetAgentInformation(context.Background(), &agentv0.AgentInformationRequest{})
 	require.NoError(t, err)
-	require.Empty(t, info.GetEffectiveInputsVersions())
-	require.True(t, proto.Equal(nextValidationCapabilities(), info.Validation))
-}
-
-func TestEffectiveInputsSymlinkBoundaries(t *testing.T) {
-	root := t.TempDir()
-	outside := t.TempDir()
-	inputWrite(t, root, "target/value.ts", "target")
-	inputWrite(t, outside, "secret", "must-not-be-hashed")
-	require.NoError(t, os.Symlink("target", filepath.Join(root, "linked")))
-	require.NoError(t, os.Symlink(outside, filepath.Join(root, "external")))
-	inputs := map[string]*agentv0.EffectiveInput{}
-	for _, name := range []string{"linked", "external", "external/secret"} {
-		discoverInputFile(root, "app/web", filepath.Join(root, name), inputs, map[string]bool{})
+	required, err := ciinputs.Required(info.Validation)
+	require.NoError(t, err)
+	discover := func() ciinputs.Task {
+		tasks, err := ciinputs.Discover(context.Background(), client, info, req, required)
+		require.NoError(t, err)
+		for _, task := range tasks {
+			if task.Key.Phase == agentv0.TaskPhase_TASK_PHASE_SBOM {
+				require.True(t, task.CacheEligible)
+				return task
+			}
+		}
+		t.Fatal("missing SBOM")
+		return ciinputs.Task{}
 	}
-	var names []string
-	for _, in := range inputs {
-		names = append(names, in.Name)
-		require.NotEqual(t, inputContentIdentity([]byte("must-not-be-hashed")), in.Identity)
-	}
-	require.Contains(t, names, "linked")
-	require.Contains(t, names, "target/value.ts")
-	require.Contains(t, names, "external")
-	require.NotContains(t, names, "external/secret")
-}
-
-func TestEffectiveInputsContentEdgesRemainTaskSpecific(t *testing.T) {
-	_, client := inputsFixture(t)
-	req := &agentv0.GetEffectiveInputsRequest{SchemaVersion: 1, Snapshot: "before", Context: []*agentv0.EffectiveInput{
-		{Kind: agentv0.EffectiveInputKind_EFFECTIVE_INPUT_KIND_SERVICE_IMPLEMENTATION, Owner: "app/api", Name: "implementation", Identity: inputContentIdentity([]byte("api-v1"))},
-		{Kind: agentv0.EffectiveInputKind_EFFECTIVE_INPUT_KIND_LIBRARY, Owner: "app/shared", Name: "library", Identity: inputContentIdentity([]byte("library-v1"))},
-	}}
-	before, err := client.GetEffectiveInputs(context.Background(), req)
+	before := discover()
+	builder := NewBuilder(service)
+	bomBefore, err := builder.SBOM(context.Background(), &builderv0.SBOMRequest{})
 	require.NoError(t, err)
-	req.Snapshot = "api-change"
-	req.Context[0].Identity = inputContentIdentity([]byte("api-v2"))
-	after, err := client.GetEffectiveInputs(context.Background(), req)
+	inputWrite(t, service.Location, "code/unit.test.ts", "test-only edit")
+	req.Snapshot = "test-only"
+	require.Equal(t, before.Identity, discover().Identity)
+	bomAfter, err := builder.SBOM(context.Background(), &builderv0.SBOMRequest{})
 	require.NoError(t, err)
-	artifact := agentv0.TaskPhase_TASK_PHASE_ARTIFACT_BUILD
-	test := agentv0.TaskPhase_TASK_PHASE_TEST
-	require.True(t, proto.Equal(inputTask(t, before, artifact, ""), inputTask(t, after, artifact, "")))
-	require.True(t, proto.Equal(inputTask(t, before, test, "pure"), inputTask(t, after, test, "pure")))
-	for _, suite := range []string{"unit", "integration", "e2e", "smoke"} {
-		require.False(t, proto.Equal(inputTask(t, before, test, suite), inputTask(t, after, test, suite)))
-	}
-	req.Snapshot = "library-change"
-	req.Context[1].Identity = inputContentIdentity([]byte("library-v2"))
-	library, err := client.GetEffectiveInputs(context.Background(), req)
+	require.True(t, proto.Equal(bomBefore, bomAfter))
+	inputWrite(t, service.Location, "code/package-lock.json", strings.ReplaceAll(lock, "1.0.0", "2.0.0"))
+	data, err := os.ReadFile(filepath.Join(service.Location, "code/package-lock.json"))
 	require.NoError(t, err)
-	require.False(t, proto.Equal(inputTask(t, after, artifact, ""), inputTask(t, library, artifact, "")))
-	require.False(t, proto.Equal(inputTask(t, after, test, "pure"), inputTask(t, library, test, "pure")))
-	req.Snapshot = "removed-edge"
-	req.Context = req.Context[1:]
-	removed, err := client.GetEffectiveInputs(context.Background(), req)
+	req.Context[2].Identity, err = ciinputs.Protect([]byte("01234567890123456789012345678901"), "fixture/key-v1", data)
 	require.NoError(t, err)
-	require.False(t, proto.Equal(inputTask(t, library, test, "integration"), inputTask(t, removed, test, "integration")))
+	req.Snapshot = "lock-change"
+	lockChanged := discover()
+	require.NotEqual(t, before.Identity, lockChanged.Identity)
+	bomAfter, err = builder.SBOM(context.Background(), &builderv0.SBOMRequest{})
+	require.NoError(t, err)
+	require.False(t, proto.Equal(bomBefore, bomAfter))
+	t.Setenv("CODEFLY_PROVIDER_ARTIFACT_DIGEST", "sha256:"+strings.Repeat("b", 64))
+	providerChanged := discover()
+	require.NotEqual(t, lockChanged.Identity, providerChanged.Identity)
+	req.Context[0].Identity.Digest = "include-dev=true"
+	require.NotEqual(t, providerChanged.Identity, discover().Identity)
+	require.NoError(t, os.Rename(filepath.Join(service.Location, "code"), filepath.Join(service.Location, "real-code")))
+	require.NoError(t, os.Symlink("real-code", filepath.Join(service.Location, "code")))
+	response, err := client.GetEffectiveInputs(context.Background(), req)
+	require.NoError(t, err)
+	sbom := inputTask(t, response, agentv0.TaskPhase_TASK_PHASE_SBOM, "")
+	require.False(t, sbom.Complete)
+	require.EqualValues(t, 0120000, pathInput(t, sbom, "code").Mode)
 }
