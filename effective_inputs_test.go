@@ -293,6 +293,15 @@ func TestEffectiveInputsCompleteSBOMThroughCore(t *testing.T) {
 		return ciinputs.Task{}
 	}
 	before := discover()
+	req.Context[2].Owner = "another/service"
+	unrelated, err := ciinputs.Discover(context.Background(), client, info, req, required)
+	require.NoError(t, err)
+	for _, task := range unrelated {
+		if task.Key.Phase == agentv0.TaskPhase_TASK_PHASE_SBOM {
+			require.False(t, task.CacheEligible)
+		}
+	}
+	req.Context[2].Owner = "app/web"
 	builder := NewBuilder(service)
 	bomBefore, err := builder.SBOM(context.Background(), &builderv0.SBOMRequest{})
 	require.NoError(t, err)

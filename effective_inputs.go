@@ -199,8 +199,18 @@ func (s *Service) GetEffectiveInputs(ctx context.Context, req *agentv0.GetEffect
 
 func (s *Service) declareSBOMInputs(project *inputProject, task *agentv0.TaskInputs, contextInputs []*agentv0.EffectiveInput) {
 	seen := map[string]bool{}
-	appendInputPath(project, filepath.Join(project.root, "service.codefly.yaml"), task, contextInputs, seen)
-	appendInputPath(project, filepath.Join(project.source, "package-lock.json"), task, contextInputs, seen)
+	declaration := filepath.Join(project.root, "service.codefly.yaml")
+	lockfile := filepath.Join(project.source, "package-lock.json")
+	declarationName, _ := filepath.Rel(project.workspace, declaration)
+	lockfileName, _ := filepath.Rel(project.workspace, lockfile)
+	var files []*agentv0.EffectiveInput
+	for _, in := range contextInputs {
+		if in.Owner == project.owner && in.Path && ((in.Kind == agentv0.EffectiveInputKind_EFFECTIVE_INPUT_KIND_CONFIGURATION && in.Name == filepath.ToSlash(declarationName)) || (in.Kind == agentv0.EffectiveInputKind_EFFECTIVE_INPUT_KIND_LOCKFILE && in.Name == filepath.ToSlash(lockfileName))) {
+			files = append(files, in)
+		}
+	}
+	appendInputPath(project, declaration, task, files, seen)
+	appendInputPath(project, lockfile, task, files, seen)
 	options := &agentv0.EffectiveInput{Kind: agentv0.EffectiveInputKind_EFFECTIVE_INPUT_KIND_CONFIGURATION, Owner: project.owner, Name: "sbom/options"}
 	for _, in := range contextInputs {
 		if in.Kind == options.Kind && in.Owner == options.Owner && in.Name == options.Name {
