@@ -417,9 +417,17 @@ type DockerTemplating struct {
 // changing whenever a floating node:24-alpine tag moves.
 const NodeImage = "node:24.17.0-alpine3.23@sha256:7c70d1235c0b4c2bc9eeed5393d19f1bbdde6885ba0d58ba62bb385d7b0f3ff1"
 
+func (s *Builder) BuildCapabilities(context.Context, *builderv0.BuildCapabilitiesRequest) (*builderv0.BuildCapabilitiesResponse, error) {
+	return &builderv0.BuildCapabilitiesResponse{BuildxSelection: true}, nil
+}
+
 func (s *Builder) Build(ctx context.Context, req *builderv0.BuildRequest) (*builderv0.BuildResponse, error) {
 	defer s.Wool.Catch()
 	ctx = s.Wool.Inject(ctx)
+
+	if req.GetBuildContext().GetDockerBuildContext().GetBuildxBuilder() != "" && req.GetOutputDirectory() == "" {
+		return s.Builder.BuildError(fmt.Errorf("Buildx selection requires output_directory for a CLI-owned recipe build"))
+	}
 
 	dockerRequest, err := s.Builder.DockerBuildRequest(ctx, req)
 	if err != nil {

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"net"
 	"os"
 	"path/filepath"
 	"testing"
@@ -9,6 +10,8 @@ import (
 	"github.com/codefly-dev/core/agents/services"
 	builderv0 "github.com/codefly-dev/core/generated/go/codefly/services/builder/v0"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 // When the CLI sends an output_directory, Build renders the recipe there and
@@ -25,17 +28,40 @@ func TestBuildEmitsRecipeWhenOutputDirectorySet(t *testing.T) {
 	})
 	require.NoError(t, err)
 
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := grpc.NewServer()
+	builderv0.RegisterBuilderServer(server, builder)
+	go func() { _ = server.Serve(listener) }()
+	t.Cleanup(server.Stop)
+	conn, err := grpc.NewClient(listener.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	client := services.NewBuilderAgentClient(conn)
+	capabilities, err := client.BuildCapabilities(ctx, &builderv0.BuildCapabilitiesRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !capabilities.GetBuildxSelection() {
+		t.Fatal("recipe producer must support caller-owned Buildx selection")
+	}
 	output := t.TempDir()
 	// A leftover artifact in the output directory (e.g. an ignore file a prior
 	// interrupted CLI build staged) must not leak into the digested recipe tree.
 	require.NoError(t, os.WriteFile(filepath.Join(output, "Dockerfile.dockerignore"), []byte("stale"), 0o644))
 
-	response, err := builder.Build(ctx, &builderv0.BuildRequest{
+	response, err := client.Build(ctx, &builderv0.BuildRequest{
 		OutputDirectory: output,
 		BuildContext: &builderv0.BuildContext{
 			Kind: &builderv0.BuildContext_DockerBuildContext{
 				DockerBuildContext: &builderv0.DockerBuildContext{
 					DockerRepository: "registry.example.com",
+					BuildxBuilder:    "recipe-only-no-such-builder",
+					Cache:            &builderv0.BuildCacheOptions{Backend: "registry", Scope: "test/service", Imports: []string{"registry.example.com/cache"}},
 				},
 			},
 		},
@@ -152,4 +178,19 @@ func TestBuildWithoutOutputDirectoryUsesInProcessBuild(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, response.GetResult().GetDockerBuildPlan())
 	require.FileExists(t, filepath.Join(tmpDir, "mod", "frontend", "builder", "Dockerfile"))
+}
+
+func TestBuildxSelectionWithoutRecipeOutputCannotExecuteLegacyBuild(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	identity, _ := testIdentity(t, root)
+	builder := NewBuilder(NewService())
+	_, err := builder.Load(ctx, &builderv0.LoadRequest{Identity: identity, CreationMode: &builderv0.CreationMode{Communicate: false}})
+	require.NoError(t, err)
+	t.Setenv("PATH", t.TempDir())
+	response, err := builder.Build(ctx, &builderv0.BuildRequest{BuildContext: &builderv0.BuildContext{Kind: &builderv0.BuildContext_DockerBuildContext{DockerBuildContext: &builderv0.DockerBuildContext{BuildxBuilder: "selected"}}}})
+	require.NoError(t, err)
+	require.NotEqual(t, builderv0.BuildStatus_SUCCESS, response.GetState().GetState())
+	require.Contains(t, response.GetState().GetMessage(), "Buildx selection requires output_directory")
+	require.NoDirExists(t, filepath.Join(root, "mod", "frontend", "builder"))
 }
