@@ -9,6 +9,7 @@ import (
 
 	"github.com/Masterminds/semver"
 	proto "github.com/codefly-dev/core/companions/proto"
+	"github.com/stretchr/testify/require"
 )
 
 // The nextjs agent generates the whole src/gen TypeScript tree — both the
@@ -41,9 +42,9 @@ func TestChangedGeneratedFilesDetectsAddsChangesAndRemovals(t *testing.T) {
 	writeGeneratedTestFile(t, actual, "removed_grpc_pb.ts", "stale")
 	writeGeneratedTestFile(t, expected, "added_grpc_pb.ts", "generated")
 	writeGeneratedTestFile(t, actual, "saas/accounts/v1/user_settings_pb.ts", "producer-owned")
-	writeGeneratedTestFile(t, expected, "saas/accounts/v1/user_settings_pb.ts", "different but producer-owned")
 
-	changed, err := changedGeneratedFiles(actual, expected, "module/services/frontend/code/src/gen")
+	changes, err := generatedFileChanges(actual, expected)
+	changed := generatedChangePaths(changes, "module/services/frontend/code/src/gen")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,12 +58,8 @@ func TestChangedGeneratedFilesDetectsAddsChangesAndRemovals(t *testing.T) {
 	}
 }
 
-// A dry-run sync generates only the flat dependency clients into the temporary
-// tree, while the committed tree also carries the per-file protocol layout that
-// the gRPC dependency's own buf.gen cross-writes (saas/accounts/v1/**, plus the
-// shared google/** and buf/** deps). None of that foreign subtree is produced
-// by this builder, so comparing the partial dry-run output against the full
-// committed tree must report no drift. Mirrors module-saas-starter frontend.
+// Producer-owned protocol trees share src/gen with the agent's clients but
+// must not become removals when absent from a frontend's staged output.
 func TestChangedGeneratedFilesIgnoresCrossWrittenDependencyTree(t *testing.T) {
 	committed := t.TempDir()
 	fresh := t.TempDir()
@@ -100,7 +97,8 @@ func TestChangedGeneratedFilesIgnoresCrossWrittenDependencyTree(t *testing.T) {
 		writeGeneratedTestFile(t, committed, relative, "// protoc-gen-es\nproducer-owned")
 	}
 
-	changed, err := changedGeneratedFiles(committed, fresh, "module/services/frontend/code/src/gen")
+	changes, err := generatedFileChanges(committed, fresh)
+	changed := generatedChangePaths(changes, "module/services/frontend/code/src/gen")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +112,8 @@ func TestChangedGeneratedFilesTreatsMissingTreesAsEmpty(t *testing.T) {
 	root := t.TempDir()
 	expected := filepath.Join(root, "expected")
 	writeGeneratedTestFile(t, expected, "client_grpc_pb.ts", "generated")
-	changed, err := changedGeneratedFiles(filepath.Join(root, "missing"), expected, "code/src/gen")
+	changes, err := generatedFileChanges(filepath.Join(root, "missing"), expected)
+	changed := generatedChangePaths(changes, "code/src/gen")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,15 +122,15 @@ func TestChangedGeneratedFilesTreatsMissingTreesAsEmpty(t *testing.T) {
 	}
 }
 
-func TestCleanDependencyGeneratedFilesPreservesProducerOwnedTrees(t *testing.T) {
+func TestPublishGeneratedFilesPreservesProducerOwnedTrees(t *testing.T) {
 	root := t.TempDir()
 	writeGeneratedTestFile(t, root, "users_accounts_grpc_pb.ts", "owned")
 	writeGeneratedTestFile(t, root, "saas/accounts/v1/user_settings_pb.ts", "producer-owned")
 	writeGeneratedTestFile(t, root, "manual.ts", "product-owned")
 
-	if err := cleanDependencyGeneratedFiles(root); err != nil {
-		t.Fatal(err)
-	}
+	changes, err := generatedFileChanges(root, t.TempDir())
+	require.NoError(t, err)
+	require.NoError(t, publishGeneratedFiles(root, changes))
 	if _, err := os.Stat(filepath.Join(root, "users_accounts_grpc_pb.ts")); !os.IsNotExist(err) {
 		t.Fatalf("owned dependency client still exists: %v", err)
 	}
@@ -175,4 +174,72 @@ func writeGeneratedTestFile(t *testing.T, root, relative, content string) {
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestPrivateGeneratedImportsNeverClaimSharedProducerFiles(t *testing.T) {
+	actual := t.TempDir()
+	writeGeneratedTestFile(t, actual, "saas/accounts/v1/api_pb.ts", "producer-owned")
+	writeGeneratedTestFile(t, actual, "google/api/http_pb.ts", "first")
+	output := map[string]generatedFile{
+		"mod_accounts_grpc_pb.ts": {kind: "file", data: []byte("client")},
+		"google/api/http_pb.ts":   {kind: "file", data: []byte("first")},
+	}
+	for _, content := range []string{"first", "second"} {
+		output["google/api/http_pb.ts"] = generatedFile{kind: "file", data: []byte(content)}
+		staged := t.TempDir()
+		require.NoError(t, stageGeneratedClients(staged, output))
+		changes, err := generatedFileChanges(actual, staged)
+		require.NoError(t, err)
+		require.NoError(t, publishGeneratedFiles(actual, changes))
+		data, err := os.ReadFile(filepath.Join(actual, generatedPrivateDirectory, "google/api/http_pb.ts"))
+		require.NoError(t, err)
+		require.Equal(t, content, string(data))
+		shared, err := os.ReadFile(filepath.Join(actual, "google/api/http_pb.ts"))
+		require.NoError(t, err)
+		require.Equal(t, "first", string(shared))
+	}
+	changes, err := generatedFileChanges(actual, t.TempDir())
+	require.NoError(t, err)
+	require.NoError(t, publishGeneratedFiles(actual, changes))
+	require.NoFileExists(t, filepath.Join(actual, generatedPrivateDirectory, "google/api/http_pb.ts"))
+	require.NoFileExists(t, filepath.Join(actual, "mod_accounts_grpc_pb.ts"))
+	require.NoFileExists(t, filepath.Join(actual, generatedOwnershipFile))
+	for _, name := range []string{"google/api/http_pb.ts", "saas/accounts/v1/api_pb.ts"} {
+		require.FileExists(t, filepath.Join(actual, name))
+	}
+}
+
+func TestGeneratedOutputRejectsProducerConflictsBeforePublishing(t *testing.T) {
+	for _, kind := range []string{"file", "directory", "symlink"} {
+		t.Run(kind, func(t *testing.T) {
+			actual, expected := t.TempDir(), t.TempDir()
+			writeGeneratedTestFile(t, actual, "app_backend_grpc_pb.ts", "old client")
+			writeGeneratedTestFile(t, expected, "app_backend_grpc_pb.ts", "new client")
+			writeGeneratedTestFile(t, expected, generatedPrivateDirectory+"/google/api/http_pb.ts", "new import")
+			writeGeneratedTestFile(t, expected, generatedOwnershipFile, "[]")
+			switch kind {
+			case "file":
+				writeGeneratedTestFile(t, actual, generatedPrivateDirectory+"/google/api/http_pb.ts", "producer-owned")
+			case "directory":
+				require.NoError(t, os.MkdirAll(filepath.Join(actual, generatedPrivateDirectory, "google/api/http_pb.ts"), 0755))
+			case "symlink":
+				require.NoError(t, os.Symlink(t.TempDir(), filepath.Join(actual, generatedPrivateDirectory)))
+
+			}
+			before, err := generatedFiles(actual)
+			require.NoError(t, err)
+			_, err = generatedFileChanges(actual, expected)
+			require.ErrorContains(t, err, "producer-owned")
+			after, err := generatedFiles(actual)
+			require.NoError(t, err)
+			require.Equal(t, before, after)
+		})
+	}
+}
+
+func TestGeneratedOwnershipRejectsPathsOutsideTheGeneratedTree(t *testing.T) {
+	actual := t.TempDir()
+	writeGeneratedTestFile(t, actual, generatedOwnershipFile, `["../producer.ts"]`)
+	_, err := generatedFileChanges(actual, t.TempDir())
+	require.ErrorContains(t, err, "invalid generated client path")
 }
