@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"embed"
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"os"
@@ -102,25 +103,15 @@ func (s *Builder) Sync(ctx context.Context, req *builderv0.SyncRequest) (*builde
 	w := s.Wool
 
 	destination := s.Local("%s/src/gen", s.Settings.NodeSourceDir())
-	generateDestination := destination
-	var temporary string
-	if syncDryRun(req) {
-		var err error
-		temporary, err = os.MkdirTemp("", "codefly-nextjs-sync-*")
-		if err != nil {
-			return s.Builder.SyncError(err)
-		}
-		defer os.RemoveAll(temporary)
-		generateDestination = filepath.Join(temporary, "gen")
-	} else if err := cleanDependencyGeneratedFiles(destination); err != nil {
+	temporary, err := os.MkdirTemp("", "codefly-nextjs-sync-*")
+	if err != nil {
 		return s.Builder.SyncError(err)
 	}
+	defer os.RemoveAll(temporary)
+	generateDestination := filepath.Join(temporary, "gen")
 
-	// Generate TypeScript Connect-ES client code from dependency gRPC endpoints.
-	// The proto companion runs buf with @bufbuild/protoc-gen-es and
-	// @connectrpc/protoc-gen-connect-es to produce typed TypeScript clients.
-	// The frontend uses Connect-web to call these services through the gateway.
-	for _, dep := range s.Service.Service.ServiceDependencies {
+	output := map[string]generatedFile{}
+	for index, dep := range s.Service.Service.ServiceDependencies {
 		grpcEP, err := resources.FindGRPCEndpointFromService(ctx, dep, s.DependencyEndpoints)
 		if err != nil {
 			return s.Builder.SyncError(err)
@@ -128,27 +119,47 @@ func (s *Builder) Sync(ctx context.Context, req *builderv0.SyncRequest) (*builde
 		if grpcEP == nil {
 			continue
 		}
-
-		w.Info("generating TypeScript Connect-ES client",
-			wool.Field("dependency", dep.Name),
-			wool.Field("destination", generateDestination))
-
-		err = proto.GenerateGRPC(ctx, languages.TYPESCRIPT, generateDestination, dep.Unique(), grpcEP)
+		dependencyDestination := filepath.Join(temporary, fmt.Sprintf("dependency-%d", index))
+		w.Info("generating TypeScript Connect-ES client", wool.Field("dependency", dep.Name))
+		// Core reclaims its destination. Each dependency gets its own tree so
+		// it cannot delete producer output or another dependency's imports.
+		if err := proto.GenerateGRPC(ctx, languages.TYPESCRIPT, dependencyDestination, dep.Unique(), grpcEP); err != nil {
+			return s.Builder.SyncError(err)
+		}
+		files, err := generatedFiles(dependencyDestination)
 		if err != nil {
 			return s.Builder.SyncError(err)
 		}
+		for name, file := range files {
+			if previous, exists := output[name]; exists && (previous.kind != file.kind || !bytes.Equal(previous.data, file.data)) {
+				return s.Builder.SyncError(fmt.Errorf("dependencies generate conflicting output for %s", name))
+			}
+			output[name] = file
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return s.Builder.SyncError(err)
+	}
+	if err := stageGeneratedClients(generateDestination, output); err != nil {
+		return s.Builder.SyncError(err)
 	}
 
-	response, err := s.Builder.SyncResponse()
-	if err != nil || !syncDryRun(req) {
-		return response, err
-	}
-	prefix := filepath.Join(s.relativeToWorkspace, s.Settings.NodeSourceDir(), "src", "gen")
-	changed, err := changedGeneratedFiles(destination, generateDestination, prefix)
+	changes, err := generatedFileChanges(destination, generateDestination)
 	if err != nil {
 		return s.Builder.SyncError(err)
 	}
-	if err := setSyncChangedFiles(response, changed); err != nil {
+	if !syncDryRun(req) {
+		if err := publishGeneratedFiles(destination, changes); err != nil {
+			return s.Builder.SyncError(err)
+		}
+		return s.Builder.SyncResponse()
+	}
+	response, err := s.Builder.SyncResponse()
+	if err != nil {
+		return response, err
+	}
+	prefix := filepath.Join(s.relativeToWorkspace, s.Settings.NodeSourceDir(), "src", "gen")
+	if err := setSyncChangedFiles(response, generatedChangePaths(changes, prefix)); err != nil {
 		return s.Builder.SyncError(err)
 	}
 	return response, nil
@@ -184,7 +195,42 @@ type generatedFile struct {
 	data []byte
 }
 
-func changedGeneratedFiles(actualRoot, expectedRoot, workspacePrefix string) ([]string, error) {
+const generatedPrivateDirectory = ".codefly-nextjs"
+const generatedOwnershipFile = generatedPrivateDirectory + "/manifest.json"
+
+func stageGeneratedClients(root string, output map[string]generatedFile) error {
+	if len(output) == 0 {
+		return nil
+	}
+	staged := map[string]generatedFile{}
+	var clients []string
+	for name, file := range output {
+		staged[filepath.Join(generatedPrivateDirectory, name)] = file
+		if filepath.Dir(name) == "." && strings.HasSuffix(name, ".ts") {
+			clients = append(clients, name)
+			module := "./" + generatedPrivateDirectory + "/" + strings.TrimSuffix(name, ".ts")
+			staged[name] = generatedFile{kind: "file", data: []byte(fmt.Sprintf("export * from %q;\n", module))}
+		}
+	}
+	sort.Strings(clients)
+	data, err := json.MarshalIndent(clients, "", "  ")
+	if err != nil {
+		return err
+	}
+	staged[generatedOwnershipFile] = generatedFile{kind: "file", data: append(data, '\n')}
+	return publishGeneratedFiles(root, staged)
+}
+
+func generatedChangePaths(changes map[string]generatedFile, prefix string) []string {
+	var paths []string
+	for name := range changes {
+		paths = append(paths, filepath.ToSlash(filepath.Join(prefix, name)))
+	}
+	sort.Strings(paths)
+	return paths
+}
+
+func generatedFileChanges(actualRoot, expectedRoot string) (map[string]generatedFile, error) {
 	actual, err := generatedFiles(actualRoot)
 	if err != nil {
 		return nil, err
@@ -193,48 +239,119 @@ func changedGeneratedFiles(actualRoot, expectedRoot, workspacePrefix string) ([]
 	if err != nil {
 		return nil, err
 	}
-	paths := map[string]bool{}
-	for path := range actual {
-		if dependencyGeneratedFile(path) {
-			paths[path] = true
+	owned := map[string]bool{}
+	manifest, hasManifest := actual[generatedOwnershipFile]
+	if hasManifest {
+		if manifest.kind != "file" {
+			return nil, fmt.Errorf("generated ownership manifest must be a regular file")
+		}
+		var clients []string
+		if err := json.Unmarshal(manifest.data, &clients); err != nil {
+			return nil, fmt.Errorf("read generated ownership: %w", err)
+		}
+		for _, name := range clients {
+			if filepath.Base(name) != name || !strings.HasSuffix(name, ".ts") {
+				return nil, fmt.Errorf("invalid generated client path %q", name)
+			}
+			owned[name] = true
 		}
 	}
-	for path := range expected {
-		if dependencyGeneratedFile(path) {
-			paths[path] = true
+	isPrivate := func(name string) bool {
+		return strings.HasPrefix(filepath.ToSlash(name), generatedPrivateDirectory+"/")
+	}
+	for name := range actual {
+		if isPrivate(name) && !hasManifest {
+			return nil, fmt.Errorf("generated output conflicts with producer-owned path %s: missing ownership manifest", name)
 		}
 	}
-	var changed []string
-	for path := range paths {
-		left, leftOK := actual[path]
-		right, rightOK := expected[path]
-		if leftOK && rightOK && left.kind == right.kind && bytes.Equal(left.data, right.data) {
+	isOwned := func(name string) bool {
+		return dependencyGeneratedFile(name) || owned[name] || hasManifest && isPrivate(name)
+	}
+	changes := map[string]generatedFile{}
+	for name, fresh := range expected {
+		previous, exists := actual[name]
+		same := exists && previous.kind == fresh.kind && bytes.Equal(previous.data, fresh.data)
+		if exists && !isOwned(name) && !same {
+			return nil, fmt.Errorf("generated output conflicts with producer-owned file %s", name)
+		}
+		if !same {
+			changes[name] = fresh
+		}
+	}
+	for name := range actual {
+		if _, exists := expected[name]; !exists && isOwned(name) {
+			changes[name] = generatedFile{}
+		}
+	}
+	// Check the entire write set before publishing: a producer's symlink or
+	// file used as a parent must not redirect writes or cause partial output.
+	for name, file := range changes {
+		if file.kind == "" {
 			continue
 		}
-		changed = append(changed, filepath.ToSlash(filepath.Join(workspacePrefix, path)))
+		if info, err := os.Lstat(filepath.Join(actualRoot, name)); err == nil && info.IsDir() {
+			return nil, fmt.Errorf("generated output conflicts with producer-owned directory %s", name)
+		} else if err != nil && !os.IsNotExist(err) {
+			return nil, err
+		}
+		for parent := filepath.Dir(name); parent != "."; parent = filepath.Dir(parent) {
+			if _, exists := actual[parent]; exists {
+				return nil, fmt.Errorf("generated output conflicts with producer-owned path %s", parent)
+			}
+		}
 	}
-	sort.Strings(changed)
-	return changed, nil
+	return changes, nil
 }
 
-// cleanDependencyGeneratedFiles removes only the flat dependency clients that
-// this agent owns. A frontend may also keep source-relative protocol output
-// under src/gen/saas, src/gen/google, and src/gen/buf; those files belong to
-// the producing service's Buf contract and must survive a frontend sync.
-func cleanDependencyGeneratedFiles(root string) error {
-	files, err := generatedFiles(root)
-	if err != nil {
-		return err
+func publishGeneratedFiles(root string, changes map[string]generatedFile) error {
+	var paths []string
+	for name := range changes {
+		if name != generatedOwnershipFile {
+			paths = append(paths, name)
+		}
 	}
-	for relative := range files {
-		if !dependencyGeneratedFile(relative) {
+	sort.Strings(paths)
+	// Publish ownership last, once the corresponding files are in place.
+	if _, exists := changes[generatedOwnershipFile]; exists {
+		paths = append(paths, generatedOwnershipFile)
+	}
+	for _, name := range paths {
+		file := changes[name]
+		target := filepath.Join(root, filepath.FromSlash(name))
+		if file.kind == "" {
+			if err := os.Remove(target); err != nil {
+				return err
+			}
 			continue
 		}
-		if err := os.Remove(filepath.Join(root, filepath.FromSlash(relative))); err != nil {
+		if err := writeGeneratedFile(target, file.data); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func writeGeneratedFile(target string, data []byte) error {
+	if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+		return err
+	}
+	file, err := os.CreateTemp(filepath.Dir(target), ".codefly-sync-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(file.Name())
+	if _, err := file.Write(data); err != nil {
+		file.Close()
+		return err
+	}
+	if err := file.Chmod(0644); err != nil {
+		file.Close()
+		return err
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	return os.Rename(file.Name(), target)
 }
 
 func dependencyGeneratedFile(relative string) bool {
@@ -247,13 +364,17 @@ func dependencyGeneratedFile(relative string) bool {
 
 func generatedFiles(root string) (map[string]generatedFile, error) {
 	files := map[string]generatedFile{}
-	if _, err := os.Lstat(root); err != nil {
+	info, err := os.Lstat(root)
+	if err != nil {
 		if os.IsNotExist(err) {
 			return files, nil
 		}
 		return nil, err
 	}
-	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
+	if !info.IsDir() {
+		return nil, fmt.Errorf("generated output root must be a directory: %s", root)
+	}
+	err = filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}

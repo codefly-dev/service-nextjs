@@ -44,11 +44,10 @@ config-mounts:
 func TestAgentInformationAdvertisesValidationContract(t *testing.T) {
 	info, err := NewService().GetAgentInformation(context.Background(), nil)
 	require.NoError(t, err)
+	require.Equal(t, []uint32{1}, info.GetEffectiveInputsVersions())
 	message := info.ProtoReflect()
 	validationField := message.Descriptor().Fields().ByName("validation")
-	if validationField == nil {
-		t.Skip("published Core pin predates validation advertisement")
-	}
+	require.NotNil(t, validationField)
 	validation := message.Get(validationField).Message()
 	for _, operation := range []string{"lint", "compile", "audit", "artifact_build"} {
 		field := validation.Descriptor().Fields().ByName(protoreflect.Name(operation))
@@ -548,7 +547,7 @@ func TestCreateToRun(t *testing.T) {
 	instance, err := resources.FindNetworkInstanceInNetworkMappings(ctx, networkMappings, runtime.HttpEndpoint, resources.NewNativeNetworkAccess())
 	require.NoError(t, err)
 
-	address := fmt.Sprintf("http://%s:%d", instance.Host, instance.Port)
+	address := instance.GetAddress()
 	client := http.Client{Timeout: 2 * time.Second}
 
 	var lastErr error
