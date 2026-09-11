@@ -2,13 +2,19 @@ package main
 
 import (
 	"context"
+	"net"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/codefly-dev/core/agents/services"
 	builderv0 "github.com/codefly-dev/core/generated/go/codefly/services/builder/v0"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 )
 
 // When the CLI sends an output_directory, Build renders the recipe there and
@@ -122,34 +128,70 @@ func TestBuildRecipeCarriesDeclaredBuildArgs(t *testing.T) {
 	require.NoError(t, services.VerifyDockerBuildPlan(output, plan))
 }
 
-// With no output_directory, Build keeps the legacy in-process path: it renders
-// the Dockerfile into the service's builder/ dir and runs docker build; it never
-// emits a recipe plan. An empty PATH makes the buildx probe fail fast, so the
-// test exercises branch selection without a docker daemon.
-func TestBuildWithoutOutputDirectoryUsesInProcessBuild(t *testing.T) {
+func TestRecipeBuildNegotiationOverGRPC(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	implementation := NewBuilder(NewService())
+	server := grpc.NewServer()
+	builderv0.RegisterBuilderServer(server, implementation)
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	go func() { _ = server.Serve(listener) }()
+	t.Cleanup(server.Stop)
+	conn, err := grpc.NewClient(listener.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, conn.Close()) })
+	client := services.NewBuilderAgentClient(conn)
 
-	ctx := context.Background()
-	tmpDir := t.TempDir()
-	identity, _ := testIdentity(t, tmpDir)
+	capabilities, err := client.BuildCapabilities(ctx, &builderv0.BuildCapabilitiesRequest{})
+	require.NoError(t, err)
+	require.True(t, capabilities.GetBuildxSelection())
+	_, err = client.BuilderClient.Build(ctx, &builderv0.BuildRequest{})
+	require.Equal(t, codes.InvalidArgument, status.Code(err))
 
-	builder := NewBuilder(NewService())
-	_, err := builder.Load(ctx, &builderv0.LoadRequest{
+	root := t.TempDir()
+	identity, _ := testIdentity(t, root)
+	_, err = client.Load(ctx, &builderv0.LoadRequest{
 		Identity:     identity,
 		CreationMode: &builderv0.CreationMode{Communicate: false},
 	})
 	require.NoError(t, err)
-
-	response, err := builder.Build(ctx, &builderv0.BuildRequest{
-		BuildContext: &builderv0.BuildContext{
-			Kind: &builderv0.BuildContext_DockerBuildContext{
-				DockerBuildContext: &builderv0.DockerBuildContext{
-					DockerRepository: "registry.example.com",
+	for _, selected := range []string{"", "explicit-builder", "cache-builder"} {
+		t.Run("builder="+selected, func(t *testing.T) {
+			dockerContext := &builderv0.DockerBuildContext{
+				DockerRepository: "registry.example.com",
+				BuildxBuilder:    selected,
+			}
+			if selected == "cache-builder" {
+				dockerContext.Cache = &builderv0.BuildCacheOptions{
+					Backend: "registry",
+					Imports: []string{"registry.example.com/cache/frontend"},
+					Exports: []string{"registry.example.com/cache/frontend"},
+					Scope:   "workspace/frontend",
+				}
+			}
+			request := &builderv0.BuildRequest{
+				OutputDirectory: t.TempDir(),
+				BuildContext: &builderv0.BuildContext{
+					Kind: &builderv0.BuildContext_DockerBuildContext{DockerBuildContext: dockerContext},
 				},
-			},
-		},
-	})
-	require.NoError(t, err)
-	require.Nil(t, response.GetResult().GetDockerBuildPlan())
-	require.FileExists(t, filepath.Join(tmpDir, "mod", "frontend", "builder", "Dockerfile"))
+			}
+			response, err := client.Build(ctx, request)
+			require.NoError(t, err)
+			require.Equal(t, builderv0.BuildStatus_SUCCESS, response.GetState().GetState())
+			plan := response.GetResult().GetDockerBuildPlan()
+			require.NotNil(t, plan)
+			require.NoError(t, services.VerifyDockerBuildPlan(request.OutputDirectory, plan))
+			require.Len(t, plan.GetRecipes(), 1)
+			require.Empty(t, response.GetBuildxBuilder())
+			require.Empty(t, response.GetCacheContractVersion())
+
+			request.OutputDirectory = ""
+			_, err = client.Build(ctx, request)
+			require.Equal(t, codes.InvalidArgument, status.Code(err))
+			require.ErrorContains(t, err, "the CLI executes")
+			require.NoDirExists(t, filepath.Join(root, "mod", "frontend", "builder"))
+		})
+	}
 }
