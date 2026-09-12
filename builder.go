@@ -27,6 +27,8 @@ import (
 	"github.com/codefly-dev/core/shared"
 	"github.com/codefly-dev/core/standards"
 	"github.com/codefly-dev/core/wool"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
@@ -417,7 +419,16 @@ type DockerTemplating struct {
 // changing whenever a floating node:24-alpine tag moves.
 const NodeImage = "node:24.17.0-alpine3.23@sha256:7c70d1235c0b4c2bc9eeed5393d19f1bbdde6885ba0d58ba62bb385d7b0f3ff1"
 
+func (s *Builder) BuildCapabilities(context.Context, *builderv0.BuildCapabilitiesRequest) (*builderv0.BuildCapabilitiesResponse, error) {
+	// Recipe execution, including Buildx selection, belongs to the CLI.
+	return &builderv0.BuildCapabilitiesResponse{BuildxSelection: true}, nil
+}
+
 func (s *Builder) Build(ctx context.Context, req *builderv0.BuildRequest) (*builderv0.BuildResponse, error) {
+	if req.GetOutputDirectory() == "" {
+		return nil, status.Error(codes.InvalidArgument, "output_directory is required: the CLI executes the Docker build recipe")
+	}
+
 	defer s.Wool.Catch()
 	ctx = s.Wool.Inject(ctx)
 
@@ -428,7 +439,7 @@ func (s *Builder) Build(ctx context.Context, req *builderv0.BuildRequest) (*buil
 
 	image := s.DockerImage(dockerRequest)
 
-	s.Wool.Debug("building docker image", wool.Field("image", image.FullName()))
+	s.Wool.Debug("preparing docker build recipe", wool.Field("image", image.FullName()))
 	if !dockerhelpers.IsValidDockerImageName(image.Name) {
 		return s.Builder.BuildError(fmt.Errorf("invalid docker image name: %s", image.Name))
 	}
@@ -439,47 +450,11 @@ func (s *Builder) Build(ctx context.Context, req *builderv0.BuildRequest) (*buil
 		BuildArgs: s.Settings.BuildArgKeys(),
 	}
 
-	if output := req.GetOutputDirectory(); output != "" {
-		return s.buildRecipe(ctx, docker, image, output)
-	}
-
-	err = shared.DeleteFile(ctx, s.Local("builder/Dockerfile"))
-	if err != nil {
-		return s.Builder.BuildError(err)
-	}
-
-	err = s.Templates(ctx, docker, services.WithBuilder(builderFS))
-	if err != nil {
-		return s.Builder.BuildError(err)
-	}
-
-	builder, err := dockerhelpers.NewBuilder(dockerhelpers.BuilderConfiguration{
-		Root:        s.Location,
-		Dockerfile:  "builder/Dockerfile",
-		Ignorefile:  "builder/dockerignore",
-		Destination: image,
-		Output:      s.Wool,
-	})
-	if err != nil {
-		return s.Builder.BuildError(err)
-	}
-	_, err = builder.Build(ctx)
-	if err != nil {
-		return s.Builder.BuildError(err)
-	}
-	s.Builder.WithDockerImages(image)
-	return s.Builder.BuildResponse()
+	return s.buildRecipe(ctx, docker, image, req.GetOutputDirectory())
 }
 
-// buildRecipe renders the Dockerfile and dockerignore into the caller-owned
-// output directory and returns a single-image DockerBuildPlan instead of
-// running docker build in-process. The recipe's dockerfile and dockerignore
-// paths are relative to that directory; its context is relative to the service
-// root (".") so the CLI evaluates the same context the in-process build used.
-// The output directory is cleared before rendering because the plan digests
-// every file it contains: any leftover artifact (a stale ignore staged by an
-// interrupted CLI build, an editor file) would otherwise enter the recipe
-// inventory and the digest.
+// Clear the output directory before rendering so stale artifacts cannot enter
+// the recipe inventory and digest.
 func (s *Builder) buildRecipe(ctx context.Context, docker DockerTemplating, image *resources.DockerImage, output string) (*builderv0.BuildResponse, error) {
 	err := os.RemoveAll(output)
 	if err != nil {
