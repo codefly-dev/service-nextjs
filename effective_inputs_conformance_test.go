@@ -36,9 +36,17 @@ func TestEffectiveInputsNativeNextAndVitest(t *testing.T) {
 	inputWrite(t, root, "code/vitest.config.mjs", `import {defineConfig} from 'vitest/config';export default defineConfig({test:{include:['checks/*.spec.js']}})`)
 	inputWrite(t, root, "code/checks/value.spec.js", `import {test,expect} from 'vitest';import fs from 'node:fs';test('fixture',()=>expect(fs.readFileSync('fixture.txt','utf8')).toBe('ok'))`)
 	inputWrite(t, root, "code/fixture.txt", `ok`)
+	// The fixture tree is the test's own TempDir, so these containers run as the
+	// invoking user: root-owned node_modules and .next would survive the test and
+	// make TempDir cleanup fail on any host that does not remap bind-mount
+	// ownership. npm needs a writable HOME and cache once it is not root.
 	run := func(args ...string) {
 		t.Helper()
-		cmd := exec.Command("docker", append([]string{"run", "--rm", "--mount", "type=bind,src=" + source + ",dst=/app", "-w", "/app", "node:22-alpine"}, args...)...)
+		docker := []string{"run", "--rm",
+			"--user", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()),
+			"--env", "HOME=/tmp", "--env", "npm_config_cache=/tmp/.npm",
+			"--mount", "type=bind,src=" + source + ",dst=/app", "-w", "/app", "node:22-alpine"}
+		cmd := exec.Command("docker", append(docker, args...)...)
 		output, err := cmd.CombinedOutput()
 		require.NoError(t, err, "%s", output)
 	}
