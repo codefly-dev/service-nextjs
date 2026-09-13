@@ -4,9 +4,11 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/codefly-dev/core/ciinputs"
@@ -43,15 +45,18 @@ func TestEffectiveInputsNativeNextAndVitest(t *testing.T) {
 	run("npm", "install", "--no-audit", "--no-fund")
 	project, err := service.inputProject(context.Background())
 	require.NoError(t, err)
-	native, ok, err := discoverNativeInputs(context.Background(), project)
-	require.NoError(t, err)
-	require.True(t, ok, "isolated native discovery must succeed")
+	native := discoverNativeInputs(context.Background(), project)
+	require.True(t, native.Available, "isolated native discovery must succeed")
+	require.True(t, native.CleanupVerified, "discovery containers must be confirmed removed")
 	require.Contains(t, native.Tasks["TASK_PHASE_ARTIFACT_BUILD"], "code/production.test.js")
 	require.NotContains(t, native.Tasks["TASK_PHASE_ARTIFACT_BUILD"], "code/checks/value.spec.js")
 	require.Contains(t, native.Tasks["test/unit"], "code/checks/value.spec.js")
 	require.Contains(t, native.Tasks["TASK_PHASE_COMPILE"], "code/compiler.ts")
 	require.Contains(t, native.Tasks["TASK_PHASE_COMPILE"], "code/production.test.js")
 	require.NotContains(t, native.Tasks["TASK_PHASE_ARTIFACT_BUILD"], "code/compiler.ts")
+	// A fixture this size fits the path budget, so nothing is reported partial.
+	require.False(t, native.Incomplete["TASK_PHASE_ARTIFACT_BUILD"])
+	require.False(t, native.Incomplete["TASK_PHASE_COMPILE"])
 	run("npm", "test", "--", "--maxWorkers=1")
 	run("npm", "run", "build", "--", "--webpack")
 	req := &agentv0.GetEffectiveInputsRequest{SchemaVersion: 1, Snapshot: "native"}
@@ -73,9 +78,8 @@ func TestEffectiveInputsNativeNextAndVitest(t *testing.T) {
 
 	t.Setenv("REVIEW_HARMLESS_SENTINEL", "host-only-value")
 	inputWrite(t, root, "code/next.config.js", `if(process.env.REVIEW_HARMLESS_SENTINEL)throw new Error('host environment forwarded');module.exports={}`)
-	native, ok, err = discoverNativeInputs(context.Background(), project)
-	require.NoError(t, err)
-	require.True(t, ok)
+	native = discoverNativeInputs(context.Background(), project)
+	require.True(t, native.Available)
 	require.Contains(t, native.Tasks["TASK_PHASE_ARTIFACT_BUILD"], "code/production.test.js")
 	inputWrite(t, root, "code/next.config.js", `const fs=require('node:fs');fs.writeFileSync('../outside.txt','bad');fs.writeFileSync('fixture.txt','after');module.exports={}`)
 	before, err := os.ReadFile(filepath.Join(source, "fixture.txt"))
@@ -89,4 +93,27 @@ func TestEffectiveInputsNativeNextAndVitest(t *testing.T) {
 	for _, in := range inputTask(t, response, agentv0.TaskPhase_TASK_PHASE_ARTIFACT_BUILD, "").Inputs {
 		require.NotEqual(t, "code/fixture.txt", in.Name)
 	}
+
+	// An application larger than the path budget must still observe a bounded
+	// prefix and say the observation is partial. Discarding the whole list
+	// instead would be indistinguishable from having observed nothing, which is
+	// what an ordinary application used to get.
+	inputWrite(t, root, "code/next.config.js", `module.exports={}`)
+	var barrel strings.Builder
+	for i := 0; i < 600; i++ {
+		inputWrite(t, root, fmt.Sprintf("code/wide/module%04d.js", i), fmt.Sprintf("export const value%04d = %d;\n", i, i))
+		barrel.WriteString(fmt.Sprintf("export {value%04d} from './module%04d';\n", i, i))
+	}
+	inputWrite(t, root, "code/wide/index.js", barrel.String())
+	inputWrite(t, root, "code/app/wide/page.js", `import * as wide from '../../wide/index.js'; export default function Page() { return <p>{Object.keys(wide).length}</p> }`)
+	native = discoverNativeInputs(context.Background(), project)
+	require.True(t, native.Available)
+	require.True(t, native.Observed["TASK_PHASE_ARTIFACT_BUILD"], "a large application must still be observed")
+	require.True(t, native.Incomplete["TASK_PHASE_ARTIFACT_BUILD"], "a truncated observation must be declared partial")
+	paths := native.Tasks["TASK_PHASE_ARTIFACT_BUILD"]
+	require.NotEmpty(t, paths, "truncation must keep a prefix, not discard the observation")
+	require.LessOrEqual(t, len(paths), nativePathBudget)
+	response, err = client.GetEffectiveInputs(context.Background(), &agentv0.GetEffectiveInputsRequest{SchemaVersion: 1, Snapshot: "wide"})
+	require.NoError(t, err)
+	require.True(t, hasMarker(inputTask(t, response, agentv0.TaskPhase_TASK_PHASE_ARTIFACT_BUILD, ""), markerObservationIncomplete))
 }

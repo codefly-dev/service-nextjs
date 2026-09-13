@@ -3,6 +3,12 @@ const path = require('node:path');
 const { createRequire } = require('node:module');
 const { pathToFileURL } = require('node:url');
 
+// Observations are bounded so one inspection cannot produce an unbounded
+// declaration. The bound truncates rather than discards: an ordinary
+// application exceeds it, and losing the whole observation would be
+// indistinguishable from having observed nothing.
+const PATH_BUDGET = 512;
+
 const [root, output, task] = process.argv.slice(2);
 const local = createRequire(path.join(root, 'package.json'));
 const manifest = local('./package.json');
@@ -71,8 +77,8 @@ async function discover() {
     } finally { await runner.close(); }
   } else { throw new Error('unsupported operation'); }
   const names = Array.from(files, file => path.relative('/workspace', file)).filter(file => file && !file.startsWith('../') && !path.isAbsolute(file)).sort();
-  if (names.length > 512) throw new Error('input budget exceeded');
-  fs.writeFileSync(output, JSON.stringify(names));
+  const truncated = names.length > PATH_BUDGET;
+  fs.writeFileSync(output, JSON.stringify({ paths: truncated ? names.slice(0, PATH_BUDGET) : names, truncated }));
 }
 
 discover().catch(() => { process.exitCode = 1; });

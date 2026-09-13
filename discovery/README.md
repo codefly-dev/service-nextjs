@@ -24,7 +24,14 @@ route discovery and its bundled tracer retain production imports with test-like
 names; the tracer receives JSX/TypeScript transformed by TypeScript. Vitest uses
 its native test specification collection with its configuration loader and cache
 configured for the read-only inspection environment. Unsupported scripts and
-failed task inspections do not remove required tasks.
+failed task inspections do not remove required tasks. A task whose inspection
+failed, ran out of budget, or exceeded the path budget declares
+`discovery/native-observation-incomplete`, so an observation that saw nothing is
+never mistaken for a clean one. When inspection cannot run at all the task
+declares `discovery/isolated-native-discovery-unavailable`, and when a container
+cannot be confirmed removed it declares
+`discovery/native-discovery-cleanup-unverified`. Container cleanup is an
+operational fault of the host and never fails the call.
 
 Native paths supplement only their corresponding task. Known package metadata
 and lockfiles are shared; the service tree and installed dependencies are never
@@ -35,19 +42,39 @@ classification. These are caller-supplied snapshot identities, not new content
 attestations by the agent. The agent does not generate hashes of potentially
 secret content or use filename rules to decide what is safe to hash.
 
-Native output is limited to 128 KiB and 512 paths per task. The response is limited
-to 512 KiB; an oversized declaration returns the entire task inventory without
-observations. This preserves a valid bounded RPC response rather than failing at
-the transport limit. Native framework observations do not establish dynamic consumption, effective
+Native output is limited to 128 KiB and 512 paths per task. Past the path budget
+the inspector reports a bounded prefix and marks the observation partial; it does
+not discard the observation, because an ordinary application exceeds the budget
+and losing the list entirely is indistinguishable from having observed nothing.
+One task inspection is given 60 seconds and the whole request 8 minutes, sized so
+a real application is inspected rather than only a fixture.
+
+The response is limited to 512 KiB. An oversized declaration drops observations
+from the largest tasks first, only as far as needed, and retains the task
+inventory and each task's runtime services; a truncated task declares
+`discovery/declaration-truncated-for-transport`. Runtime services state which
+services a suite must have started, and no size condition makes that untrue.
+
+A request larger than the transport bound, and one naming a source state other
+than the current worktree, both answer with the full inventory and no
+observations, leaving every task conservative. Neither returns an error: Core
+degrades only on `Unimplemented`, so any other status fails the caller's whole
+discovery rather than that one observation.
+
+Native framework observations do not establish dynamic consumption, effective
 execution configuration, transitive dependencies or generation/artifact closure.
-Those tasks remain incomplete and cannot enable reuse or production exclusion. A historical revision
-returns incomplete inventory without applying current tools or the current graph
-to that revision. Missing images and nonreproducible execution environments also
-leave inspection unresolved.
+Those tasks remain incomplete and cannot enable reuse or production exclusion. A
+stack-starting suite additionally declares
+`discovery/runtime-service-closure-unresolved`, because this agent reads only its
+own service declaration and its runtime-service list is therefore a subset of the
+stack. Missing images, image references that are not image references, and
+nonreproducible execution environments leave inspection unresolved.
 
 The ordinary RPC tests cover headless Core discovery, dependency kinds, protected
-context, symlink targets, request validation, and a 4,000-file tree with an 8 GiB
-sparse asset. Native conformance uses real containerized Next.js and Vitest, builds
+context, symlink targets, request validation, a 4,000-file tree with an 8 GiB
+sparse asset, a repository-sized resolved context, dependencies that resolve to
+one owner, resolved context whose file mode disagrees with the worktree, and a
+declaration too large for the transport. Native conformance uses real containerized Next.js and Vitest, builds
 the production artifact, checks task separation and verifies that hostile
 configuration cannot modify source or inherit the host environment. CI runs it:
 
@@ -63,9 +90,12 @@ name `sbom/options`, and VERSIONED identity namespace
 `codefly.nextjs.sbom-options/v1`, digest `include-dev=false` or `include-dev=true`.
 Core's verified `CODEFLY_PROVIDER_ARTIFACT_DIGEST` supplies the agent implementation
 identity; that artifact plus the platform identifies the in-process Go toolchain.
-Reuse requires resolved identities for every input. Unresolved file identities,
-missing provider identity, and a mismatch with the loaded source-dir settings
-prevent reuse. Symlinked SBOM inputs remain incomplete. No secret values or
+Reuse requires resolved identities for every input. Unresolved file identities
+and a missing provider identity prevent reuse. Completeness also requires that
+discovery inspected the same tree `Builder.SBOM` reads; the source directory
+itself is not compared, because the declaration that selects it is already a
+declared input, so changing it changes that input's identity. Symlinked SBOM
+inputs remain incomplete. No secret values or
 unkeyed hashes of project files are produced by discovery.
 
 The tests exercise complete SBOM discovery through Core's real Agent client and

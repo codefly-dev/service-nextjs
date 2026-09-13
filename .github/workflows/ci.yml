@@ -19,13 +19,21 @@ jobs:
 
   effective-inputs-conformance:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
-      - run: docker pull node:22-alpine
-      - run: go test -tags ciinputs_conformance -run TestEffectiveInputsNative -count=1 -timeout 300s ./...
+          cache: false
+      # The inspected image is pinned by digest so a moving tag cannot change
+      # what this job proves, then retagged because discovery resolves an
+      # already-installed tag and never pulls.
+      - run: |
+          digest=sha256:c610fcdfb1d5b4740dd70c284ed3cb16bb857e0f7166196e36a5501df7a3aa32
+          docker pull "node:22-alpine@${digest}"
+          docker tag "node:22-alpine@${digest}" node:22-alpine
+      - run: go test -tags ciinputs_conformance -run TestEffectiveInputsNative -count=1 -timeout 600s ./...
 
   sync-conformance:
     runs-on: ubuntu-latest
