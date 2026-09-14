@@ -291,9 +291,10 @@ func (s *Service) GetAgentInformation(ctx context.Context, _ *agentv0.AgentInfor
 			agentv0.Language_TYPESCRIPT,
 			agentv0.Language_JAVASCRIPT,
 		},
-		Protocols:  []agentv0.Protocol_Type{agentv0.Protocol_HTTP},
-		ReadMe:     readme,
-		Validation: nextValidationCapabilities(),
+		Protocols:               []agentv0.Protocol_Type{agentv0.Protocol_HTTP},
+		ReadMe:                  readme,
+		Validation:              nextValidationCapabilities(),
+		EffectiveInputsVersions: []uint32{1},
 	}.Build()
 	return advertisement, nil
 }

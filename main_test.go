@@ -44,7 +44,7 @@ config-mounts:
 func TestAgentInformationAdvertisesValidationContract(t *testing.T) {
 	info, err := NewService().GetAgentInformation(context.Background(), nil)
 	require.NoError(t, err)
-	require.Empty(t, info.GetEffectiveInputsVersions())
+	require.Equal(t, []uint32{1}, info.GetEffectiveInputsVersions())
 	message := info.ProtoReflect()
 	validationField := message.Descriptor().Fields().ByName("validation")
 	require.NotNil(t, validationField)
