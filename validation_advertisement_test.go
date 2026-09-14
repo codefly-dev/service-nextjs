@@ -5,8 +5,24 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/codefly-dev/core/ciinputs"
 	agentv0 "github.com/codefly-dev/core/generated/go/codefly/services/agent/v0"
 )
+
+// Core derives the required CI task set from this inventory, so a capability it
+// cannot turn into a valid task key fails effective-input discovery for the
+// whole agent rather than just that phase.
+func TestAdvertisedCapabilitiesAreValidTaskKeys(t *testing.T) {
+	required, err := ciinputs.Required(nextValidationCapabilities())
+	require.NoError(t, err)
+	require.NotEmpty(t, required)
+
+	_, err = ciinputs.Evaluate(nil, &agentv0.GetEffectiveInputsRequest{
+		SchemaVersion: ciinputs.Version,
+		Snapshot:      "capabilities",
+	}, required)
+	require.NoError(t, err)
+}
 
 func TestFrontendTestSuitesDeclareTheirProductionGraph(t *testing.T) {
 	capabilities := nextValidationCapabilities().GetTest()

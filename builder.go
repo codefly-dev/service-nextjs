@@ -509,9 +509,14 @@ func nodeAuditOptions(req *builderv0.AuditRequest) audit.NodeOptions {
 
 // SBOM inventories package-lock.json without installing packages or running
 // lifecycle scripts. The lockfile, not ambient node_modules, is authoritative.
+// Image scope is served from subjects the caller resolved after executing the
+// emitted recipe: buildx belongs to the CLI, so the digest exists only there.
 func (s *Builder) SBOM(ctx context.Context, req *builderv0.SBOMRequest) (*builderv0.SBOMResponse, error) {
 	defer s.Wool.Catch()
 	ctx = s.Wool.Inject(ctx)
+	if req.GetScope() == builderv0.SBOMScope_SBOM_SCOPE_IMAGE {
+		return s.Builder.SBOMImages(ctx, req.GetSubjects(), sbom.SourceRegistry)
+	}
 	dir := s.Local("%s", s.Settings.NodeSourceDir())
 	result, err := sbom.Node(ctx, dir, req.GetIncludeDevDependencies())
 	if err != nil {
