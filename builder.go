@@ -514,8 +514,13 @@ func nodeAuditOptions(req *builderv0.AuditRequest) audit.NodeOptions {
 func (s *Builder) SBOM(ctx context.Context, req *builderv0.SBOMRequest) (*builderv0.SBOMResponse, error) {
 	defer s.Wool.Catch()
 	ctx = s.Wool.Inject(ctx)
-	if req.GetScope() == builderv0.SBOMScope_SBOM_SCOPE_IMAGE {
-		return s.Builder.SBOMImages(ctx, req.GetSubjects(), sbom.SourceRegistry)
+	switch req.GetScope() {
+	case builderv0.SBOMScope_SBOM_SCOPE_IMAGE:
+		return s.imageSBOM(ctx, req.GetSubjects())
+	case builderv0.SBOMScope_SBOM_SCOPE_UNSPECIFIED, builderv0.SBOMScope_SBOM_SCOPE_SOURCE:
+		// The source inventory below answers both.
+	default:
+		return s.Builder.SBOMUnsupported(fmt.Sprintf("unsupported SBOM scope %s", req.GetScope()))
 	}
 	dir := s.Local("%s", s.Settings.NodeSourceDir())
 	result, err := sbom.Node(ctx, dir, req.GetIncludeDevDependencies())
@@ -523,6 +528,19 @@ func (s *Builder) SBOM(ctx context.Context, req *builderv0.SBOMRequest) (*builde
 		return s.Builder.SBOMError(err)
 	}
 	return s.Builder.SBOMResponse(result.Bom, result.Tool, result.Language, result.SHA256)
+}
+
+// imageSBOM refuses a subject that names no immutable digest. A tag can be
+// repushed between the build that produced it and this scan, so evidence bound
+// to whatever it resolves to now would describe an image that was never
+// shipped, while still reporting complete coverage.
+func (s *Builder) imageSBOM(ctx context.Context, subjects []*builderv0.ImageSubject) (*builderv0.SBOMResponse, error) {
+	for _, subject := range subjects {
+		if subject.GetDigest() == "" && !strings.Contains(subject.GetReference(), "@") {
+			return s.Builder.SBOMImageSubjectsRequired()
+		}
+	}
+	return s.Builder.SBOMImages(ctx, subjects, sbom.SourceRegistry)
 }
 
 // Upgrade bumps npm dependencies in package.json (npm update by default,
