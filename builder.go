@@ -540,7 +540,7 @@ func (s *Builder) imageSBOM(ctx context.Context, subjects []*builderv0.ImageSubj
 			return s.Builder.SBOMImageSubjectsRequired()
 		}
 	}
-	return s.Builder.SBOMImages(ctx, subjects, sbom.SourceRegistry)
+	return s.Builder.SBOMImages(ctx, subjects)
 }
 
 // Upgrade bumps npm dependencies in package.json (npm update by default,
