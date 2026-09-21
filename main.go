@@ -14,6 +14,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/codefly-dev/core/agents"
+	"github.com/codefly-dev/core/agents/contract"
 	"github.com/codefly-dev/core/agents/services"
 	"github.com/codefly-dev/core/builders"
 	basev0 "github.com/codefly-dev/core/generated/go/codefly/base/v0"
@@ -36,6 +37,13 @@ var agent = shared.Must(resources.LoadFromFs[resources.Agent](shared.Embed(infoF
 // image is the mode-consistent default and gets rebuilt + pinned on
 // every codefly release.
 var runtimeImage = &resources.DockerImage{Name: "codeflydev/node", Tag: "0.0.13"}
+
+// lifecycleProtocolVersion is the generation of the CLI-agent lifecycle
+// contract this agent implements. It is a declaration, never a value read back
+// from the linked SDK: a Core release that moves hosts to a new generation must
+// make this binary fail admission until its lifecycle is actually rebuilt for
+// it, rather than have it advertise a contract nobody here implemented.
+const lifecycleProtocolVersion = 1
 
 var requirements = builders.NewDependencies(agent.Name,
 	builders.NewDependency("service.codefly.yaml"),
@@ -296,6 +304,14 @@ func (s *Service) GetAgentInformation(ctx context.Context, _ *agentv0.AgentInfor
 		Validation:              nextValidationCapabilities(),
 		EffectiveInputsVersions: []uint32{1},
 	}.Build()
+	advertisement.Contract = &agentv0.AgentContract{
+		ProtocolVersion: lifecycleProtocolVersion,
+		// The stdout handshake is written by the linked SDK's Serve, so the
+		// format this binary speaks is whatever that release emits — reading
+		// it back is the declaration, not a claim made beside it.
+		StartupProtocolVersion: agents.ProtocolVersion,
+		Capabilities:           []string{contract.ContainerRecoveryScope},
+	}
 	return advertisement, nil
 }
 
