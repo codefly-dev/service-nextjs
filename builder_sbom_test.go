@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -46,12 +47,51 @@ func buildPlan(t *testing.T, builder *Builder) *builderv0.DockerBuildPlan {
 	return plan
 }
 
-// buildPlanSubjects is what the emitted recipe declares, one subject per shipped
-// platform. They name a tag and carry no digest, which is precisely why they
-// cannot stand in for subjects resolved from the build the caller actually ran.
+// resolvedFrom stands in for the build the caller ran: one resolved image per
+// recipe and platform, each with its own digest so coverage is matched per
+// platform rather than satisfied by any one of them.
+func resolvedFrom(plan *builderv0.DockerBuildPlan) []sbom.ResolvedImage {
+	var resolved []sbom.ResolvedImage
+	for _, recipe := range plan.GetRecipes() {
+		for i, platform := range recipe.GetPlatforms() {
+			resolved = append(resolved, sbom.ResolvedImage{
+				Recipe:   recipe.GetName(),
+				Platform: platform,
+				Digest:   fmt.Sprintf("sha256:%064d", len(resolved)+i),
+			})
+		}
+	}
+	return resolved
+}
+
+// buildPlanSubjects is what the recipe declares once the caller's build has
+// pinned each shipped platform to the digest it produced.
 func buildPlanSubjects(t *testing.T, builder *Builder) []*builderv0.ImageSubject {
 	t.Helper()
-	return sbom.ExpectedFromBuildPlan("frontend", buildPlan(t, builder))
+	plan := buildPlan(t, builder)
+	subjects, err := sbom.ExpectedFromBuildPlan("frontend", plan, resolvedFrom(plan))
+	require.NoError(t, err)
+	return subjects
+}
+
+// unpinnedPlanSubjects is what the emitted recipe declares on its own: a tag and
+// no digest. Deriving subjects this way is the mistake the agent has to refuse,
+// so they are built here rather than obtained from a helper that now refuses to
+// produce them.
+func unpinnedPlanSubjects(t *testing.T, builder *Builder) []*builderv0.ImageSubject {
+	t.Helper()
+	var subjects []*builderv0.ImageSubject
+	for _, recipe := range buildPlan(t, builder).GetRecipes() {
+		for _, platform := range recipe.GetPlatforms() {
+			subjects = append(subjects, &builderv0.ImageSubject{
+				Reference: recipe.GetImage(),
+				Platform:  platform,
+				Role:      recipe.GetName(),
+				Service:   "frontend",
+			})
+		}
+	}
+	return subjects
 }
 
 // The recipe ships both architectures, so image coverage is only satisfied by
@@ -66,13 +106,28 @@ func TestBuildPlanExpectsEveryShippedPlatform(t *testing.T) {
 		plan.GetRecipes()[0].GetPlatforms(),
 	)
 
+	expected, err := sbom.ExpectedFromBuildPlan("frontend", plan, resolvedFrom(plan))
+	require.NoError(t, err)
+
 	platforms := make([]string, 0)
-	for _, subject := range sbom.ExpectedFromBuildPlan("frontend", plan) {
+	for _, subject := range expected {
 		require.Equal(t, "frontend", subject.GetService())
 		require.Equal(t, "frontend", subject.GetRole())
 		platforms = append(platforms, subject.GetPlatform())
 	}
 	require.ElementsMatch(t, []string{"linux/amd64", "linux/arm64"}, platforms)
+}
+
+// The recipe names a tag, so subjects can only be pinned by what the caller's
+// build resolved. Without it there is nothing to pin them to, and deriving them
+// anyway would bind evidence to whatever the tag serves at scan time.
+func TestBuildPlanSubjectsRequireTheBuildToResolveADigest(t *testing.T) {
+	builder := loadedBuilder(t)
+	plan := buildPlan(t, builder)
+
+	subjects, err := sbom.ExpectedFromBuildPlan("frontend", plan, nil)
+	require.Error(t, err)
+	require.Empty(t, subjects)
 }
 
 // seedLockfile gives the source inventory something authoritative to read, so
@@ -115,7 +170,7 @@ func TestSourceSBOMIsScopedToSourceAndFailsImageCoverage(t *testing.T) {
 		require.NotEmpty(t, response.GetBom().GetComponents())
 		require.Empty(t, response.GetImages())
 
-		require.Error(t, sbom.ValidateCoverage(subjects, response))
+		require.Error(t, sbom.ValidateCoverage("frontend", subjects, response))
 	}
 }
 
@@ -139,7 +194,7 @@ func TestImageSBOMWithoutSubjectsIsAPreconditionFailure(t *testing.T) {
 	require.Empty(t, response.GetImages())
 	require.Equal(t, builderv0.NoImageReason_NO_IMAGE_REASON_UNSPECIFIED, response.GetNoImageReason())
 
-	require.Error(t, sbom.ValidateCoverage(buildPlanSubjects(t, builder), response))
+	require.Error(t, sbom.ValidateCoverage("frontend", buildPlanSubjects(t, builder), response))
 }
 
 // Evidence has to name the image that was shipped. A tag can be repushed
@@ -148,7 +203,7 @@ func TestImageSBOMWithoutSubjectsIsAPreconditionFailure(t *testing.T) {
 // the tag resolves to today. The plan's own subjects are exactly that input.
 func TestImageSBOMRejectsSubjectsWithoutAnImmutableDigest(t *testing.T) {
 	builder := loadedBuilder(t)
-	subjects := buildPlanSubjects(t, builder)
+	subjects := unpinnedPlanSubjects(t, builder)
 	require.NotEmpty(t, subjects)
 	for _, subject := range subjects {
 		require.Empty(t, subject.GetDigest())
@@ -168,7 +223,7 @@ func TestImageSBOMRejectsSubjectsWithoutAnImmutableDigest(t *testing.T) {
 		response.GetState().GetFailure().GetCode(),
 	)
 	require.Empty(t, response.GetImages())
-	require.Error(t, sbom.ValidateCoverage(subjects, response))
+	require.Error(t, sbom.ValidateCoverage("frontend", subjects, response))
 }
 
 // A scan that cannot run fails the whole response rather than returning partial
