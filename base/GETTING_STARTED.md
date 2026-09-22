@@ -4,11 +4,16 @@
 
 ```bash
 cd code
-npm install
+npm ci
 npm run dev
 ```
 
 Your app will be running at http://localhost:3000.
+
+`npm ci` installs exactly what `package-lock.json` records, which is what CI and
+the production container build install too. The framework version comes from
+this application, not from the agent release: `package.json` declares it and the
+lockfile pins it. Commit both whenever either changes.
 
 ## Testing
 

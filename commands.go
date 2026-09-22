@@ -28,6 +28,12 @@ func (s *Runtime) registerCommands() {
 	}, s.cmdHealth)
 
 	s.RegisterCommand(&agentv0.CommandDefinition{
+		Name:        "framework",
+		Description: "Report the Next.js and React versions this service resolves",
+		Tags:        []string{"info", "diagnostic", "dependencies"},
+	}, s.cmdFramework)
+
+	s.RegisterCommand(&agentv0.CommandDefinition{
 		Name:        "routes",
 		Description: "List all page routes in the Next.js app",
 		Tags:        []string{"info", "routing"},
@@ -98,6 +104,44 @@ func (s *Runtime) cmdHealth(_ context.Context, _ []string) (string, error) {
 	}
 	defer resp.Body.Close()
 	return fmt.Sprintf("HEALTHY: HTTP %d", resp.StatusCode), nil
+}
+
+// cmdFramework answers the question the agent version cannot: this agent ships a
+// scaffold, so from the first install onwards the framework version is selected
+// by the application's manifest and lockfile, never by the agent release. It
+// reads both rather than the installed tree, so it answers before any install
+// and in every runtime mode.
+func (s *Runtime) cmdFramework(_ context.Context, _ []string) (string, error) {
+	manifest, err := readNodePackageManifest(s.sourceLocation)
+	if err != nil {
+		return "", err
+	}
+	lock, err := readNodePackageLock(s.sourceLocation)
+	if err != nil {
+		return "", err
+	}
+
+	var lines []string
+	for _, name := range []string{"next", "react"} {
+		declared := manifest.declaredVersion(name)
+		if declared == "" {
+			continue
+		}
+		lines = append(lines, fmt.Sprintf("%s: declared %s, resolved %s", name, declared, resolvedOrUnpinned(lock, name)))
+	}
+	if lock == nil {
+		lines = append(lines, "install: npm install — resolution is not pinned; commit package-lock.json so development, CI and the container build install the same versions")
+	} else {
+		lines = append(lines, "install: npm ci — pinned by package-lock.json")
+	}
+	return strings.Join(lines, "\n"), nil
+}
+
+func resolvedOrUnpinned(lock *nodePackageLock, name string) string {
+	if version := lock.resolvedVersion(name); version != "" {
+		return version
+	}
+	return "(not in lockfile)"
 }
 
 func (s *Runtime) cmdRoutes(ctx context.Context, _ []string) (string, error) {

@@ -13,6 +13,41 @@ The agent owns the Next.js substrate only. Application plugin contracts and
 composition remain application-owned; no package is discovered or registered
 by side effect.
 
+## Framework version
+
+The agent ships the application substrate; it does not select the framework at
+runtime. From the first install onwards the version that runs is chosen by the
+application itself:
+
+1. `code/package.json` declares the constraint. The scaffold pins `next`
+   exactly, so it cannot float onto an untested release.
+2. `code/package-lock.json` records the version npm resolved. `npm ci` — used by
+   local development, CI and the container build alike — reinstalls exactly that.
+
+A newer agent release therefore never implies a newer Next.js, and the agent's
+`framework` command reports what this service will actually run:
+
+```
+next: declared 16.3.6, resolved 16.3.6
+react: declared 19.2.8, resolved 19.2.8
+install: npm ci — pinned by package-lock.json
+```
+
+This substrate is validated against Next.js `16.3.6` and React `19.2.8` — boot,
+production build, standalone output, App Router routing, hydration and the React
+Compiler.
+
+To move the framework, change `code/package.json`, regenerate the lockfile and
+commit both:
+
+```bash
+cd code && npm install next@<version> eslint-config-next@<version>
+```
+
+Keep `eslint-config-next` on the Next.js version: the Next.js lint rules ship
+with the framework. Never move an application to `canary`, and never override an
+application constraint to force a version it does not declare.
+
 ## Development
 
 ```bash

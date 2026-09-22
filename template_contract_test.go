@@ -47,7 +47,7 @@ func TestFactoryTemplateUsesExplicitApplicationOwnedComposition(t *testing.T) {
 		t.Fatalf("React Compiler version = %q", manifest.DevDependencies["babel-plugin-react-compiler"])
 	}
 	for name, version := range map[string]string{
-		"next":      "16.2.12",
+		"next":      "16.3.6",
 		"react":     "19.2.8",
 		"react-dom": "19.2.8",
 	} {
@@ -64,10 +64,10 @@ func TestFactoryTemplateUsesExplicitApplicationOwnedComposition(t *testing.T) {
 	if err != nil || !strings.Contains(string(biomeConfig), "schemas/2.5.4/schema.json") {
 		t.Fatalf("Biome config is missing or unpinned: err=%v content=%s", err, biomeConfig)
 	}
-	if manifest.Overrides["postcss"] != "8.5.19" {
+	if manifest.Overrides["postcss"] != "8.5.28" {
 		t.Fatalf("postcss override = %q", manifest.Overrides["postcss"])
 	}
-	if manifest.Overrides["sharp"] != "0.35.3" {
+	if manifest.Overrides["sharp"] != "0.35.4" {
 		t.Fatalf("sharp override = %q", manifest.Overrides["sharp"])
 	}
 

@@ -14,16 +14,25 @@ This repo holds the generated application twice, deliberately and awkwardly:
   by `base/service.generation.codefly.yaml`.
 
 Dependabot watches both (`.github/dependabot.yml` lists `/base/code` and
-`/templates/factory/code` as npm directories). **No test compares them.** They
-have already drifted — `base/` carries `package-lock.json`, a healthz route test
-and `src/lib/connect/transport.ts`; `templates/factory/code` carries `biome.json`
-and the biome scripts. Assume nothing propagates on its own.
+`/templates/factory/code` as npm directories). **Only the framework versions and
+the overrides are compared** — by
+`TestReferenceApplicationAndFactoryPinTheSameFrameworkVersions`. Everything else
+has already drifted: `base/` carries a healthz route test and
+`src/lib/connect/transport.ts`; `templates/factory/code` carries `biome.json` and
+the biome scripts. Assume nothing else propagates on its own.
+
+Both trees carry `package-lock.json`, and both are shipped state: the factory's
+is embedded and written into every new service, so a scaffold is installable with
+`npm ci` before anyone has run `npm install`. A manifest edit that does not
+regenerate both lockfiles leaves the scaffold resolving a version it does not
+declare.
 
 ## What one change touches
 
 | You change | Also change | Caught by |
 | --- | --- | --- |
-| a dependency or script in the app | both `base/code/package.json` and `templates/factory/code/package.json` | `TestFactoryTemplateUsesExplicitApplicationOwnedComposition` — factory only |
+| a dependency or script in the app | both `base/code/package.json` and `templates/factory/code/package.json`, then `npm install --package-lock-only` in each | `TestFactoryTemplateUsesExplicitApplicationOwnedComposition` — factory only |
+| a framework version (`next`, `react`, `react-dom`, `eslint-config-next`) or an override | both manifests, both lockfiles, and the version named in `templates/agent/README.md.tmpl` | `TestFactoryShipsALockfileThatPinsTheDeclaredFrameworkVersions`, `TestReferenceApplicationAndFactoryPinTheSameFrameworkVersions`, `TestServedReadmeRecordsOnlyVersionsTheScaffoldPins` |
 | a file in the generated app | both trees; `.tmpl` suffix only if it needs `{{ .Service.* }}` | nothing compares the trees |
 | a scaffolded route | the contract test naming it, e.g. `TestHealthProbePathIsScaffoldedAsARouteHandler` | that test |
 | `templates/builder/Dockerfile.tmpl` | the digest-pinned base image in `builder.go` if the Node major moves | `TestBuilderTemplateInstallsWorkspaceGraphReproducibly`, `TestBuilderTemplateRendersDeclaredBuildArgsBeforeBuild` |
@@ -35,8 +44,8 @@ and the biome scripts. Assume nothing propagates on its own.
 - **Workspace composition is explicit and application-owned.** The factory
   `package.json` declares its workspaces; the Dockerfile installs the whole
   graph with `npm ci` before building, so a build is reproducible from the
-  lockfile. A change that makes the install depend on network resolution at
-  build time breaks the contract the test asserts.
+  lockfile the scaffold ships. A change that makes the install depend on network
+  resolution at build time breaks the contract the test asserts.
 - **Build args are rendered before `npm run build`**, not after. Next.js inlines
   public configuration at build time; an arg that arrives later is silently
   absent from the bundle.

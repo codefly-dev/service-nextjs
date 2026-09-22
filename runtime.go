@@ -234,11 +234,19 @@ func (s *Runtime) Load(ctx context.Context, req *runtimev0.LoadRequest) (*runtim
 		if err != nil {
 			return s.Runtime.LoadErrorf(err, "resolving Next.js readiness timeout")
 		}
+		lock, err := readNodePackageLock(sourceLocation)
+		if err != nil {
+			return s.Runtime.LoadErrorf(err, "loading Node.js lockfile")
+		}
 		s.Wool.Info(
 			"resolved Next.js execution profile",
 			wool.Field("environment", req.GetEnvironment().GetName()),
 			wool.Field("profile", s.executionProfile),
 			wool.Field("readiness_timeout", s.readinessTimeout),
+			// The agent version says nothing about the framework version: the
+			// application's manifest and lockfile select it.
+			wool.Field("next_declared", s.packageManifest.declaredVersion("next")),
+			wool.Field("next_resolved", resolvedOrUnpinned(lock, "next")),
 		)
 	} else {
 		// Generic Node.js packages use this agent for typed Code/Runtime

@@ -232,8 +232,58 @@ func readNodePackageManifest(sourceDir string) (*nodePackageManifest, error) {
 	return &manifest, nil
 }
 
+// nodePackageLock is the resolved half of the dependency contract. package.json
+// declares what is acceptable; package-lock.json records what npm actually
+// selected, and it is what `npm ci` reinstalls byte-for-byte in development, CI
+// and the container build. A newer agent therefore never implies a newer
+// framework: this file does.
+type nodePackageLock struct {
+	LockfileVersion int `json:"lockfileVersion"`
+	Packages        map[string]struct {
+		Version string `json:"version"`
+	} `json:"packages"`
+}
+
+// readNodePackageLock returns a nil lock and no error when the project has no
+// lockfile: an unpinned project is a reportable state, not a failure.
+func readNodePackageLock(sourceDir string) (*nodePackageLock, error) {
+	data, err := os.ReadFile(filepath.Join(sourceDir, "package-lock.json"))
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read package-lock.json: %w", err)
+	}
+	var lock nodePackageLock
+	if err := json.Unmarshal(data, &lock); err != nil {
+		return nil, fmt.Errorf("parse package-lock.json: %w", err)
+	}
+	return &lock, nil
+}
+
+// resolvedVersion reports the version npm selected for a top-level dependency,
+// or "" when the project is unpinned or the package is absent.
+func (l *nodePackageLock) resolvedVersion(name string) string {
+	if l == nil {
+		return ""
+	}
+	return l.Packages["node_modules/"+name].Version
+}
+
+// declaredVersion reports the constraint package.json states for a dependency,
+// across the runtime and development scopes.
+func (m *nodePackageManifest) declaredVersion(name string) string {
+	if m == nil {
+		return ""
+	}
+	if version := m.Dependencies[name]; version != "" {
+		return version
+	}
+	return m.DevDependencies[name]
+}
+
 func (m *nodePackageManifest) hasDependency(name string) bool {
-	return m.Dependencies[name] != "" || m.DevDependencies[name] != ""
+	return m.declaredVersion(name) != ""
 }
 
 func (m *nodePackageManifest) projectKind() nodeProjectKind {

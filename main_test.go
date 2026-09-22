@@ -340,6 +340,16 @@ func TestBuilderCreate(t *testing.T) {
 	// Core Next.js files
 	assertFileExists(t, serviceDir, "code/package.json")
 	assertFileExists(t, serviceDir, "code/.gitignore")
+	// A scaffold without its lockfile resolves its dependency graph at whatever
+	// moment the first install runs, and the container build — which runs
+	// `npm ci` — has nothing to install from at all.
+	assertFileExists(t, serviceDir, "code/package-lock.json")
+	scaffoldedLock, err := readNodePackageLock(path.Join(serviceDir, "code"))
+	require.NoError(t, err)
+	scaffoldedManifest, err := readNodePackageManifest(path.Join(serviceDir, "code"))
+	require.NoError(t, err)
+	require.Equal(t, scaffoldedManifest.declaredVersion("next"), scaffoldedLock.resolvedVersion("next"),
+		"the scaffolded lockfile must resolve the Next.js version the scaffolded manifest declares")
 	assertFileExists(t, serviceDir, "code/tsconfig.json")
 	assertFileExists(t, serviceDir, "code/next.config.ts")
 	assertFileExists(t, serviceDir, "code/vitest.config.ts")
