@@ -19,6 +19,7 @@ import (
 	"time"
 
 	basev0 "github.com/codefly-dev/core/generated/go/codefly/base/v0"
+	agentv0 "github.com/codefly-dev/core/generated/go/codefly/services/agent/v0"
 	"google.golang.org/protobuf/types/known/durationpb"
 
 	"github.com/codefly-dev/core/agents/helpers/code"
@@ -39,14 +40,16 @@ type Runtime struct {
 	*Service
 
 	// internal
-	runnerEnvironment runners.RunnerEnvironment
-	runner            runners.Proc
-	workspaceConfigs  []*basev0.Configuration
-	dependenciesMu    sync.Mutex
-	executionProfile  NextExecutionProfile
-	readinessTimeout  time.Duration
-	packageManifest   *nodePackageManifest
-	projectKind       nodeProjectKind
+	runnerEnvironment   runners.RunnerEnvironment
+	runner              runners.Proc
+	workspaceConfigs    []*basev0.Configuration
+	dependenciesMu      sync.Mutex
+	executionProfile    NextExecutionProfile
+	readinessTimeout    time.Duration
+	packageManifest     *nodePackageManifest
+	projectKind         nodeProjectKind
+	dependencyEndpoints []*basev0.Endpoint
+	dependencyMappings  []*basev0.NetworkMapping
 }
 
 func NewRuntime(service *Service) *Runtime {
@@ -295,6 +298,10 @@ func (s *Runtime) Init(ctx context.Context, req *runtimev0.InitRequest) (*runtim
 	}
 
 	s.NetworkMappings = req.ProposedNetworkMappings
+	s.dependencyEndpoints = req.GetDependenciesEndpoints()
+	s.dependencyMappings = req.GetDependenciesNetworkMappings()
+	s.Runtime.SetFixtureFromInit(req.GetFixture())
+	s.Runtime.SetOverridesFromInit(req.GetOverrides())
 
 	// Source-only Node.js/TypeScript packages legitimately expose no HTTP
 	// endpoint. Their typed test/build/lint capabilities still need a fully
@@ -391,6 +398,7 @@ func (s *Runtime) Start(ctx context.Context, req *runtimev0.StartRequest) (*runt
 	if err != nil {
 		return s.Runtime.StartError(err)
 	}
+	s.dependencyMappings = req.GetDependenciesNetworkMappings()
 
 	// Forward fixture env var so the FE can serve fixture data in dev mode
 	s.Wool.Debug("setting fixture", wool.Field("fixture", req.Fixture))
@@ -779,6 +787,10 @@ func (s *Runtime) Test(ctx context.Context, req *runtimev0.TestRequest) (*runtim
 		return s.Runtime.TestErrorf(fmt.Errorf("package.json has no %q script", npmScript), "selecting Node.js test script")
 	}
 	runnerKind := manifest.testRunner(npmScript)
+	testEnvs, err := s.testEnvironment(ctx, req.GetSuite())
+	if err != nil {
+		return s.Runtime.TestErrorf(err, "getting environment variables")
+	}
 	if err := s.ensureNodeDependencies(ctx); err != nil {
 		return s.Runtime.TestErrorf(err, "preparing Node.js dependencies")
 	}
@@ -840,10 +852,6 @@ func (s *Runtime) Test(ctx context.Context, req *runtimev0.TestRequest) (*runtim
 		wool.Field("script", npmScript),
 		wool.Field("args", args))
 
-	testEnvs, err := s.EnvironmentVariables.All()
-	if err != nil {
-		return s.Runtime.TestErrorf(err, "getting environment variables")
-	}
 	// Reporter output is an agent-owned evidence path. Append it after project
 	// env so a stale user value cannot redirect or discard the current run.
 	testEnvs = append(testEnvs, reporterEnvs...)
@@ -902,6 +910,62 @@ func (s *Runtime) Test(ctx context.Context, req *runtimev0.TestRequest) (*runtim
 		response.Output = fmt.Sprintf("automatic Playwright browser recovery failed: %v", recoveryErr)
 	}
 	return completedTestRPCResult(response, runErr)
+}
+
+func (s *Runtime) testEnvironment(ctx context.Context, suite string) ([]*resources.EnvironmentVariable, error) {
+	if s.Service == nil || s.Base == nil || s.Base.Service == nil || s.Identity == nil {
+		return nil, fmt.Errorf("test runtime has not loaded a service")
+	}
+	if suite == "" {
+		suite = "unit"
+	}
+	if suiteDependencyMode(&agentv0.TaskKey{Phase: agentv0.TaskPhase_TASK_PHASE_TEST, Suite: suite}) == agentv0.TestDependencyMode_TEST_DEPENDENCY_MODE_NONE {
+		return s.EnvironmentVariables.All()
+	}
+	// Init reaches a test target even when the policy never starts it. Verify
+	// every consumed endpoint, then project this invocation's accepted mappings.
+	for _, dependency := range s.Base.Service.ServiceDependencies {
+		if !dependency.Participates(resources.StageRun) {
+			continue
+		}
+		if _, err := resources.ResolveServiceDependencyEndpoints(dependency, s.dependencyEndpoints); err != nil {
+			return nil, fmt.Errorf("test dependency context: %w", err)
+		}
+		endpoints, err := resources.ConsumedDependencyEndpoints(s.Identity.Module, dependency, s.dependencyEndpoints)
+		if err != nil {
+			return nil, err
+		}
+		for _, endpoint := range endpoints {
+			if _, err := resources.FindNetworkInstanceInNetworkMappings(ctx, s.dependencyMappings, endpoint, resources.NewNativeNetworkAccess()); err != nil {
+				return nil, fmt.Errorf("test dependency %s requires its accepted network mapping at Init: %w", resources.EndpointDestination(endpoint), err)
+			}
+		}
+	}
+	variables, err := s.EnvironmentVariables.All()
+	if err != nil {
+		return nil, err
+	}
+	dependencies := resources.NewEnvironmentVariableManager()
+	if err := dependencies.AddEndpoints(ctx, s.dependencyMappings, resources.NewNativeNetworkAccess()); err != nil {
+		return nil, err
+	}
+	resolved, err := dependencies.All()
+	if err != nil {
+		return nil, err
+	}
+	// Start may already have projected these keys. Replace them, so readers
+	// never depend on first-versus-last duplicate environment semantics.
+	keys := make(map[string]bool, len(resolved))
+	for _, variable := range resolved {
+		keys[variable.Key] = true
+	}
+	result := make([]*resources.EnvironmentVariable, 0, len(variables)+len(resolved))
+	for _, variable := range variables {
+		if !keys[variable.Key] {
+			result = append(result, variable)
+		}
+	}
+	return append(result, resolved...), nil
 }
 
 // completedConsoleTestResult preserves the typed TestResponse contract when a

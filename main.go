@@ -310,7 +310,7 @@ func (s *Service) GetAgentInformation(ctx context.Context, _ *agentv0.AgentInfor
 		// format this binary speaks is whatever that release emits — reading
 		// it back is the declaration, not a claim made beside it.
 		StartupProtocolVersion: agents.ProtocolVersion,
-		Capabilities:           []string{contract.ContainerRecoveryScope},
+		Capabilities:           []string{contract.ContainerRecoveryScope, contract.RuntimeInitDependencyMappings},
 	}
 	return advertisement, nil
 }

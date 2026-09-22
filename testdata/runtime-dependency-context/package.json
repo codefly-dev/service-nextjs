@@ -1,0 +1,5 @@
+{
+  "name": "runtime-dependency-context",
+  "private": true,
+  "scripts": { "test": "node --test --test-reporter=spec dependency.test.cjs" }
+}
