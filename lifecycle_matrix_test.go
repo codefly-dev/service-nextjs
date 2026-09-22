@@ -10,6 +10,8 @@ import (
 
 	"github.com/codefly-dev/core/resources"
 	runners "github.com/codefly-dev/core/runners/base"
+	"github.com/codefly-dev/core/runners/dockerrun"
+	"github.com/codefly-dev/core/runners/recoveryscope"
 	"github.com/codefly-dev/core/runners/testmatrix"
 )
 
@@ -25,6 +27,16 @@ func TestNextjsLifecycle_Matrix(t *testing.T) {
 		t.Fatalf("mkdtemp: %v", err)
 	}
 	defer os.RemoveAll(dir)
+	// The test executable may be a grandchild of `codefly test source`; its
+	// fixture containers belong to this test, not the inherited launch scope.
+	t.Setenv(recoveryscope.EnvironmentVariable, os.Getenv(recoveryscope.EnvironmentVariable))
+	scope, err := dockerrun.NewContainerRecoveryScope(dir, dir, t.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := dockerrun.SetContainerRecoveryScope(scope); err != nil {
+		t.Fatal(err)
+	}
 
 	// Provision the nix devShell (nodejs) into the work dir so the nix backend
 	// has a flake to materialize — mirrors what the runtime does via
