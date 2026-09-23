@@ -11,11 +11,15 @@ import (
 	agenttesting "github.com/codefly-dev/core/agents/testing"
 	basev0 "github.com/codefly-dev/core/generated/go/codefly/base/v0"
 	builderv0 "github.com/codefly-dev/core/generated/go/codefly/services/builder/v0"
+	"github.com/codefly-dev/core/resources"
+	"github.com/codefly-dev/core/standards"
 	"github.com/stretchr/testify/require"
 )
 
 func TestDeploymentTemplates(t *testing.T) {
-	agenttesting.AssertKustomizeTemplates(t, deploymentFS, nil)
+	agenttesting.AssertKustomizeTemplates(t, deploymentFS, &deploymentTemplateParameters{
+		ServicePorts: []servicePort{{Port: containerPort}},
+	})
 }
 
 func TestDeployProfiles(t *testing.T) {
@@ -304,4 +308,115 @@ func requireNoDeploymentFile(t *testing.T, destination string, elements ...strin
 	t.Helper()
 	_, err := os.Stat(filepath.Join(append([]string{destination}, elements...)...))
 	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
+// The CLI allocates this service's http endpoint an in-cluster port and tells
+// every consumer to dial it; the Service must publish that port and forward it
+// to the container's 3000.
+func TestDeployServicePublishesAllocatedPort(t *testing.T) {
+	builder, identity, environment := loadDeployTestBuilder(t)
+	mappings := []*basev0.NetworkMapping{httpMapping(builder, identity, "http", 8080)}
+
+	service, output := deployServiceManifest(t, builder, environment, mappings)
+	require.Equal(t, builderv0.KubernetesManifestValidation_STATUS_PASSED, output.GetValidation().GetStaticValidation())
+	require.Contains(t, service, "  ports:\n    - port: 8080\n      targetPort: 3000\n")
+	require.NotContains(t, service, "port: 3000\n")
+	require.NotContains(t, service, "name: http-")
+}
+
+func TestDeployServiceNamesPortsOnlyWhenMoreThanOne(t *testing.T) {
+	builder, identity, environment := loadDeployTestBuilder(t)
+	mappings := []*basev0.NetworkMapping{
+		httpMapping(builder, identity, "http", 8080),
+		httpMapping(builder, identity, "admin", 8081),
+		// Another service's endpoint and an external endpoint of this one are
+		// never published by this Service.
+		{
+			Endpoint:  &basev0.Endpoint{Name: "http", Module: identity.Module, Service: "other", Api: standards.HTTP},
+			Instances: []*basev0.NetworkInstance{containerInstance(9090)},
+		},
+		{
+			Endpoint:  &basev0.Endpoint{Name: "public", Module: identity.Module, Service: identity.Name, Api: standards.HTTP, Visibility: resources.VisibilityExternal},
+			Instances: []*basev0.NetworkInstance{containerInstance(9091)},
+		},
+	}
+
+	service, output := deployServiceManifest(t, builder, environment, mappings)
+	require.Equal(t, builderv0.KubernetesManifestValidation_STATUS_PASSED, output.GetValidation().GetStaticValidation())
+	require.Contains(t, service, "    - name: http-8080\n      port: 8080\n      targetPort: 3000\n")
+	require.Contains(t, service, "    - name: http-8081\n      port: 8081\n      targetPort: 3000\n")
+	require.NotContains(t, service, "9090")
+	require.NotContains(t, service, "9091")
+}
+
+// With no mapping for this service's endpoint, the Service keeps publishing
+// the container port, exactly as it rendered before ports were derived.
+func TestDeployServiceFallsBackToContainerPortWithoutMapping(t *testing.T) {
+	builder, _, environment := loadDeployTestBuilder(t)
+
+	service, output := deployServiceManifest(t, builder, environment, nil)
+	require.Equal(t, builderv0.KubernetesManifestValidation_STATUS_PASSED, output.GetValidation().GetStaticValidation())
+	require.Contains(t, service, "  ports:\n    - port: 3000\n      targetPort: 3000\n")
+}
+
+func loadDeployTestBuilder(t *testing.T) (*Builder, *basev0.ServiceIdentity, *basev0.Environment) {
+	t.Helper()
+	ctx := context.Background()
+	identity, environment := testIdentity(t, t.TempDir())
+	environmentProto, err := environment.Proto()
+	require.NoError(t, err)
+	builder := NewBuilder(NewService())
+	_, err = builder.Load(ctx, &builderv0.LoadRequest{
+		Identity:     identity,
+		CreationMode: &builderv0.CreationMode{Communicate: false},
+	})
+	require.NoError(t, err)
+	if builder.HttpEndpoint == nil {
+		builder.HttpEndpoint = &basev0.Endpoint{Name: "http", Module: identity.Module, Service: identity.Name, Api: standards.HTTP}
+	}
+	return builder, identity, environmentProto
+}
+
+func httpMapping(builder *Builder, identity *basev0.ServiceIdentity, name string, port uint32) *basev0.NetworkMapping {
+	return &basev0.NetworkMapping{
+		Endpoint: &basev0.Endpoint{
+			Name:       name,
+			Module:     builder.HttpEndpoint.GetModule(),
+			Service:    builder.HttpEndpoint.GetService(),
+			Api:        standards.HTTP,
+			Visibility: resources.VisibilityPublic,
+		},
+		Instances: []*basev0.NetworkInstance{containerInstance(port)},
+	}
+}
+
+func containerInstance(port uint32) *basev0.NetworkInstance {
+	instance := resources.NewNetworkInstance("frontend.codefly-test.svc.cluster.local", uint16(port))
+	instance.Access = resources.NewContainerNetworkAccess()
+	return instance
+}
+
+func deployServiceManifest(t *testing.T, builder *Builder, environment *basev0.Environment, mappings []*basev0.NetworkMapping) (string, *builderv0.KubernetesDeploymentOutput) {
+	t.Helper()
+	destination := t.TempDir()
+	response, err := builder.Deploy(context.Background(), &builderv0.DeploymentRequest{
+		Environment:     environment,
+		NetworkMappings: mappings,
+		Deployment: &builderv0.Deployment{
+			Kind: &builderv0.Deployment_Kubernetes{
+				Kubernetes: &builderv0.KubernetesDeployment{
+					Namespace:   "codefly-test",
+					Destination: destination,
+					BuildContext: &builderv0.DockerBuildContext{
+						DockerRepository: "registry.example.com",
+						ImageDigest:      "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+					},
+					Profile: builderv0.KubernetesOutputProfile_KUBERNETES_OUTPUT_PROFILE_RESTRICTED_PORTABLE_V1,
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, builderv0.DeploymentStatus_SUCCESS, response.GetState().GetState(), response.GetState().GetMessage())
+	return readDeploymentFile(t, destination, "base", "service.yaml"), response.GetDeployment().GetKubernetes()
 }

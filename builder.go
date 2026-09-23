@@ -564,17 +564,87 @@ func (s *Builder) Deploy(ctx context.Context, req *builderv0.DeploymentRequest) 
 	defer s.Wool.Catch()
 	ctx = s.Wool.Inject(ctx)
 
+	parameters := &deploymentTemplateParameters{}
 	return s.Builder.DeployKustomize(ctx, req, services.KustomizeDeployment{
 		EnvironmentVariables: s.EnvironmentVariables,
 		Templates:            deploymentFS,
+		Parameters:           parameters,
 		PodOverlay:           s.podOverlay(),
 		Inputs: services.DeploymentInputs{
 			OwnEndpoints:             true,
 			DependencyEndpoints:      true,
 			DependencyConfigurations: true,
 		},
-		Prepare: s.addSpecEnvironment,
+		Prepare: func(ctx context.Context, deployment *services.KustomizeDeploymentContext) error {
+			ports, err := s.servicePorts(ctx, deployment.Request.GetNetworkMappings())
+			if err != nil {
+				return err
+			}
+			parameters.ServicePorts = ports
+			return s.addSpecEnvironment(ctx, deployment)
+		},
 	})
+}
+
+// containerPort is the port the Next.js server listens on inside the pod
+// (deployment.yaml.tmpl's containerPort). Every published Service port
+// forwards to it.
+const containerPort uint32 = 3000
+
+// deploymentTemplateParameters reach the kustomize templates as
+// .Deployment.Parameters.
+type deploymentTemplateParameters struct {
+	ServicePorts []servicePort
+}
+
+// servicePort is one port the rendered Service publishes. Name is empty when
+// the Service has a single port, which Kubernetes allows to stay anonymous.
+type servicePort struct {
+	Name string
+	Port uint32
+}
+
+// servicePorts lists the ports the rendered Service publishes: one per HTTP
+// endpoint this service declares, at the in-cluster port core allocated to it.
+// Core tells every consumer to dial that port, so the Service must publish it
+// and fold it onto the container port.
+//
+// When the request carries no container mapping for this service's endpoints
+// (a render with no network input), the Service keeps publishing the container
+// port so that render is unchanged.
+func (s *Builder) servicePorts(ctx context.Context, mappings []*v0.NetworkMapping) ([]servicePort, error) {
+	var ports []servicePort
+	if s.HttpEndpoint != nil {
+		for _, mapping := range mappings {
+			endpoint := mapping.GetEndpoint()
+			if endpoint.GetApi() != standards.HTTP ||
+				endpoint.GetModule() != s.HttpEndpoint.GetModule() ||
+				endpoint.GetService() != s.HttpEndpoint.GetService() {
+				continue
+			}
+			// An external endpoint is reached through its DNS entry from outside
+			// the cluster, never through this Service, and core gives it no
+			// container view at all.
+			if resources.IsExternalEndpoint(endpoint) {
+				continue
+			}
+			instance, err := resources.FindNetworkInstanceInNetworkMappings(ctx, mappings, endpoint, resources.NewContainerNetworkAccess())
+			if err != nil {
+				return nil, err
+			}
+			// Naming a port after its number keeps it a valid IANA_SVC_NAME
+			// whatever the endpoint is called.
+			ports = append(ports, servicePort{Name: fmt.Sprintf("http-%d", instance.GetPort()), Port: instance.GetPort()})
+		}
+	}
+	if len(ports) == 0 {
+		ports = []servicePort{{Port: containerPort}}
+	}
+	// A multi-port Service must name every port; a single-port one need not.
+	if len(ports) == 1 {
+		ports[0].Name = ""
+	}
+	return ports, nil
 }
 
 // addSpecEnvironment feeds spec.environment into the deployment-scoped env
