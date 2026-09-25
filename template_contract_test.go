@@ -146,6 +146,12 @@ func TestBuilderTemplateInstallsWorkspaceGraphReproducibly(t *testing.T) {
 	if sourceCopy < 0 || !(sourceCopy < cleanInstall && cleanInstall < dependencyCopy && dependencyCopy < build) {
 		t.Fatal("builder must replace host node_modules with the clean dependency layer before build")
 	}
+	// A workspace dependency npm could not hoist lives in
+	// packages/<name>/node_modules, which only the deps stage has.
+	workspaceCopy := strings.LastIndex(source, "COPY --from=deps /app/packages ./packages")
+	if workspaceCopy < 0 || !(sourceCopy < workspaceCopy && workspaceCopy < build) {
+		t.Fatal("builder must restore the workspace packages' nested installs from the deps stage before build")
+	}
 	if strings.Contains(source, "node:{{.NodeVersion}}") {
 		t.Fatal("Dockerfile template must not use the floating Node major tag")
 	}

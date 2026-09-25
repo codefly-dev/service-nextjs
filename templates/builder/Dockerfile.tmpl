@@ -25,6 +25,12 @@ COPY service.codefly.yaml /service.codefly.yaml
 # otherwise host-absolute .bin symlinks can shadow the container executables.
 RUN rm -rf node_modules
 COPY --from=deps /app/node_modules ./node_modules
+# npm nests a workspace's dependency under packages/<name>/node_modules when its
+# version conflicts with one hoisted to the root. Those installs exist only in
+# the deps stage (host copies are excluded from the context), so restore the
+# workspace packages from there too, or the build resolves the hoisted version
+# instead. The sources are the same context files the deps stage copied.
+COPY --from=deps /app/packages ./packages
 
 ENV NEXT_TELEMETRY_DISABLED=1
 {{range .BuildArgs}}
