@@ -112,7 +112,12 @@ rather than re-deriving it from `effective_inputs.go`.
   An application-level change lands in both, or the next scaffold diverges from
   the substrate Dependabot is upgrading.
 - **Images are pinned deliberately** — `codeflydev/node` in `main.go`, the
-  build substrate by digest in `builder.go`. Bump them, never float them.
+  build substrate by digest in `builder.go`, the static runner by digest in
+  `templates/builder/Dockerfile.tmpl`. Bump them, never float them, and pin the
+  multi-arch index rather than one platform: the recipe declares amd64 and
+  arm64. The apk layer is the one input that is *recorded* instead of pinned —
+  `change-factory-substrate` says which pin has which refresh path, and which
+  has none.
 
 ## Procedures
 
