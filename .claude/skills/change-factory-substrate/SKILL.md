@@ -35,7 +35,8 @@ declare.
 | a framework version (`next`, `react`, `react-dom`, `eslint-config-next`) or an override | both manifests, both lockfiles, and the version named in `templates/agent/README.md.tmpl` | `TestFactoryShipsALockfileThatPinsTheDeclaredFrameworkVersions`, `TestReferenceApplicationAndFactoryPinTheSameFrameworkVersions`, `TestServedReadmeRecordsOnlyVersionsTheScaffoldPins` |
 | a file in the generated app | both trees; `.tmpl` suffix only if it needs `{{ .Service.* }}` | nothing compares the trees |
 | a scaffolded route | the contract test naming it, e.g. `TestHealthProbePathIsScaffoldedAsARouteHandler` | that test |
-| `templates/builder/Dockerfile.tmpl` | the digest-pinned base image in `builder.go` if the Node major moves | `TestBuilderTemplateInstallsWorkspaceGraphReproducibly`, `TestBuilderTemplateRendersDeclaredBuildArgsBeforeBuild` |
+| `templates/builder/Dockerfile.tmpl` | the digest-pinned base image in `builder.go` if the Node major moves | `TestBuilderTemplateInstallsWorkspaceGraphReproducibly`, `TestBuilderTemplateRendersDeclaredBuildArgsBeforeBuild`, `TestRenderedDockerfilePinsEveryExternalImageByDigest` |
+| a `FROM` in that template | nothing else — but it must name a digest or an earlier stage, in **both** `{{if .Static}}` arms | `TestRenderedDockerfilePinsEveryExternalImageByDigest` renders both arms; `TestBuilderTemplateRecordsTheResolvedOSPackageSetInBothRunners` checks each carries the apk record |
 | `templates/deployment/**` | identity must still match the container's | `TestDeploymentIdentityMatchesContainerIdentity`, `deployment_test.go`, and the manifest guard |
 | a dotfile in the factory tree | nothing — but confirm `all:` still picks it up | `TestBuilderCreate` |
 
@@ -52,9 +53,26 @@ declare.
 - **Static mode is a different Dockerfile branch** (`{{if .Static}}`, nginx over
   `/app/out`) and `Builder.Create` overwrites `next.config.ts` with
   `output: "export"`. Changing one mode's scaffold does not change the other's.
-- **Images stay pinned.** The build substrate is pinned by digest in
-  `builder.go`; the runtime companion (`codeflydev/node`) is pinned in `main.go`
-  and is built in core, not here. `Settings.RuntimeImage` rejects `:latest`.
+- **Images stay pinned, and every pin has a named refresh path.** Three pins,
+  three different owners:
+
+  | Pin | Lives in | Refreshed by |
+  | --- | --- | --- |
+  | static runner, `nginx:<ver>-alpine@sha256:` | `templates/builder/Dockerfile.tmpl` | Dependabot's `docker` group — `.github/dependabot.yml` already lists `/templates/builder`, and the fetcher's filename pattern matches `Dockerfile.tmpl`, so it rewrites tag and digest together |
+  | build substrate, `NodeImage` | `builder.go` (a Go const) | **nobody — by hand.** Dependabot's docker ecosystem cannot see a Go constant, and `FROM {{.NodeImage}}` has no literal tag for it to parse |
+  | runtime companion, `codeflydev/node` | `main.go` | built and released in core, bumped here when core releases one |
+
+  `Settings.RuntimeImage` rejects `:latest`. Pin digests to the **multi-arch
+  index**, not a single platform: the recipe declares `linux/amd64` and
+  `linux/arm64`, and a per-platform digest fails the build on the other arch.
+  Resolve one with
+  `docker buildx imagetools inspect <image>:<tag> --format '{{.Manifest.Digest}}'`.
+- **The apk layer is recorded, not pinned.** `libc6-compat` is a virtual name
+  that resolves to gcompat plus its dependencies, and Alpine's package index
+  keeps only the current build of each, so `=<version>` fails the build instead
+  of aging. The deps stage writes `apk info -v | sort` to
+  `/codefly/apk-packages.txt` and both runner arms copy it, so the OS packages
+  behind a pushed image stay readable from that image.
 
 ## Verifying
 

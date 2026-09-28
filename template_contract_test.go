@@ -272,3 +272,122 @@ func TestDeploymentIdentityMatchesContainerIdentity(t *testing.T) {
 		t.Fatal("deployment identity drifted from the Dockerfile nextjs:nodejs user")
 	}
 }
+
+// Every external image the emitted recipe builds FROM must be pinned by digest:
+// a floating tag lets an unchanged recipe resolve to different bytes on a later
+// build, which is the whole reason the recipe is emitted rather than improvised.
+// This runs over the RENDERED Dockerfile in both modes, so {{.NodeImage}} is
+// checked as the image it actually becomes and neither runner arm — nginx for
+// static, the Node base for SSR — can regress to a tag unnoticed.
+func TestRenderedDockerfilePinsEveryExternalImageByDigest(t *testing.T) {
+	t.Parallel()
+
+	dockerfile, err := fs.ReadFile(builderFS, "templates/builder/Dockerfile.tmpl")
+	if err != nil {
+		t.Fatalf("read Dockerfile template: %v", err)
+	}
+	parsed, err := template.New("Dockerfile").Parse(string(dockerfile))
+	if err != nil {
+		t.Fatalf("parse Dockerfile template: %v", err)
+	}
+
+	fromLine := regexp.MustCompile(`(?im)^FROM\s+(?:--platform=\S+\s+)?(\S+)(?:\s+AS\s+(\S+))?[ \t]*$`)
+	for _, static := range []bool{true, false} {
+		rendered := &bytes.Buffer{}
+		if err := parsed.Execute(rendered, DockerTemplating{NodeImage: NodeImage, Static: static}); err != nil {
+			t.Fatalf("static=%v: render Dockerfile: %v", static, err)
+		}
+		out := rendered.String()
+		froms := fromLine.FindAllStringSubmatch(out, -1)
+		if len(froms) == 0 {
+			t.Fatalf("static=%v: rendered Dockerfile declares no FROM:\n%s", static, out)
+		}
+
+		stages := map[string]bool{}
+		runner := ""
+		for _, from := range froms {
+			image, stage := from[1], strings.ToLower(from[2])
+			// A FROM naming an earlier stage inherits that stage's pin; anything
+			// else is pulled from a registry and must name its digest.
+			if !stages[strings.ToLower(image)] && !strings.Contains(image, "@sha256:") {
+				t.Fatalf("static=%v: FROM %s is neither an earlier stage nor digest-pinned", static, image)
+			}
+			if stage != "" {
+				stages[stage] = true
+			}
+			if stage == "runner" {
+				runner = image
+			}
+		}
+		if runner == "" {
+			t.Fatalf("static=%v: rendered Dockerfile defines no runner stage", static)
+		}
+		// Both arms must keep serving what they serve: nginx over the static
+		// export, the Node base for the standalone server.
+		if static {
+			if !strings.HasPrefix(runner, "nginx:") {
+				t.Fatalf("static runner is %q, want a pinned nginx image", runner)
+			}
+			for _, required := range []string{"COPY --from=builder /app/out /usr/share/nginx/html", `CMD ["nginx", "-g", "daemon off;"]`} {
+				if !strings.Contains(out, required) {
+					t.Fatalf("static runner missing %q", required)
+				}
+			}
+		} else {
+			if runner != "base" {
+				t.Fatalf("SSR runner is %q, want the shared base stage", runner)
+			}
+			// Trimming npm/corepack/yarn out of the SSR runtime is deliberate:
+			// the served image ships a server, not a package manager.
+			for _, required := range []string{"/usr/local/lib/node_modules/corepack", "/opt/yarn-v1.22.22", "/usr/local/bin/yarnpkg", `CMD ["node", "server.js"]`} {
+				if !strings.Contains(out, required) {
+					t.Fatalf("SSR runner missing %q", required)
+				}
+			}
+		}
+	}
+}
+
+// The apk layer is the one build input that cannot honestly be pinned here:
+// libc6-compat is a virtual name apk resolves to gcompat plus gcompat's own
+// dependencies, so an `=<version>` pin constrains one package of three, and
+// Alpine's branch index carries only the current revision of each, so a pinned
+// revision becomes an unbuildable recipe rather than a stale one. The resolved
+// set is therefore recorded into both runtime images, where the digest the CLI
+// captures makes it retrievable.
+func TestBuilderTemplateRecordsTheResolvedOSPackageSetInBothRunners(t *testing.T) {
+	t.Parallel()
+
+	dockerfile, err := fs.ReadFile(builderFS, "templates/builder/Dockerfile.tmpl")
+	if err != nil {
+		t.Fatalf("read Dockerfile template: %v", err)
+	}
+	source := string(dockerfile)
+
+	install := strings.Index(source, "apk add --no-cache libc6-compat")
+	record := strings.Index(source, "apk info -v | sort > /codefly/apk-packages.txt")
+	if install < 0 {
+		t.Fatal("deps stage no longer installs libc6-compat")
+	}
+	if record < 0 {
+		t.Fatal("deps stage must record the resolved apk package set to /codefly/apk-packages.txt")
+	}
+	if install > record {
+		t.Fatal("the package set must be recorded after the install, or it omits what was installed")
+	}
+
+	parsed, err := template.New("Dockerfile").Parse(source)
+	if err != nil {
+		t.Fatalf("parse Dockerfile template: %v", err)
+	}
+	for _, static := range []bool{true, false} {
+		rendered := &bytes.Buffer{}
+		if err := parsed.Execute(rendered, DockerTemplating{NodeImage: NodeImage, Static: static}); err != nil {
+			t.Fatalf("static=%v: render Dockerfile: %v", static, err)
+		}
+		// Evidence that stays in a discarded build stage is not evidence.
+		if !strings.Contains(rendered.String(), "COPY --from=deps /codefly/apk-packages.txt /codefly/apk-packages.txt") {
+			t.Fatalf("static=%v: runtime image does not carry the recorded package set", static)
+		}
+	}
+}
