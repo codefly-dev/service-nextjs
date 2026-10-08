@@ -336,7 +336,7 @@ func TestDeployServiceNamesPortsOnlyWhenMoreThanOne(t *testing.T) {
 			Instances: []*basev0.NetworkInstance{containerInstance(9090)},
 		},
 		{
-			Endpoint:  &basev0.Endpoint{Name: "public", Module: identity.Module, Service: identity.Name, Api: standards.HTTP, Visibility: resources.VisibilityExternal},
+			Endpoint:  &basev0.Endpoint{Name: "public", Module: identity.Module, Service: identity.Name, Api: standards.HTTP, Visibility: resources.VisibilityPublic, Exposure: resources.ExposurePublic},
 			Instances: []*basev0.NetworkInstance{containerInstance(9091)},
 		},
 	}
