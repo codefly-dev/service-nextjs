@@ -95,6 +95,14 @@ func dependencyTestRuntime(t *testing.T) *Runtime {
 		{Module: "mod", Name: "api", Endpoints: []*resources.EndpointReference{{Name: "http"}}},
 	}}
 	require.NoError(t, service.SaveAtDir(ctx, filepath.Join(root, "mod", "frontend")))
+	// The dependency names mod/api, and core#721 judges the edge against the
+	// composition: a module reference alone is not enough, the service the
+	// dependency resolves to has to exist in it. Its endpoint is internal —
+	// reachable by whatever composes the module — which is what this test
+	// means by an accepted address.
+	dependencyService := &resources.Service{Name: "api", Version: "0.0.0",
+		Endpoints: []*resources.Endpoint{{Name: "http", API: "http", Visibility: resources.VisibilityInternal}}}
+	require.NoError(t, dependencyService.SaveAtDir(ctx, filepath.Join(root, "mod", "api")))
 	source := filepath.Join(root, "mod", "frontend", "code")
 	require.NoError(t, os.MkdirAll(source, 0o755))
 	for _, name := range []string{"package.json", "dependency.test.cjs"} {

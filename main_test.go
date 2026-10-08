@@ -76,7 +76,14 @@ func testIdentity(t *testing.T, tmpDir string) (*basev0.ServiceIdentity, *resour
 	// invisible to FindWorkspaceUpFrom.
 	workspace := &resources.Workspace{Name: "test", Layout: resources.LayoutKindFlat,
 		Modules: []*resources.ModuleReference{{Name: "mod"}}}
-	require.NoError(t, workspace.SaveToDirUnsafe(ctx, tmpDir))
+	// Written directly, and `layout: modules` rather than `flat`, because a
+	// FLAT workspace is one module named after itself: postLoad replaces any
+	// declared list with `[{Name: workspace.Name}]`. The module list is the
+	// whole point here — core#721 judges an edge by asking the composition
+	// whether it carries both ends — so the layout that keeps it is required,
+	// with `path` naming where the module actually sits.
+	require.NoError(t, os.WriteFile(path.Join(tmpDir, "workspace.codefly.yaml"),
+		[]byte("name: test\nlayout: modules\nmodules:\n    - name: mod\n      path: mod\n"), 0o644))
 
 	service := &resources.Service{Name: "frontend", Version: "0.0.0"}
 	err := service.SaveAtDir(ctx, path.Join(tmpDir, fmt.Sprintf("mod/%s", service.Name)))
@@ -543,7 +550,14 @@ func TestCreateToRun(t *testing.T) {
 	// invisible to FindWorkspaceUpFrom.
 	workspace := &resources.Workspace{Name: "test", Layout: resources.LayoutKindFlat,
 		Modules: []*resources.ModuleReference{{Name: "mod"}}}
-	require.NoError(t, workspace.SaveToDirUnsafe(ctx, tmpDir))
+	// Written directly, and `layout: modules` rather than `flat`, because a
+	// FLAT workspace is one module named after itself: postLoad replaces any
+	// declared list with `[{Name: workspace.Name}]`. The module list is the
+	// whole point here — core#721 judges an edge by asking the composition
+	// whether it carries both ends — so the layout that keeps it is required,
+	// with `path` naming where the module actually sits.
+	require.NoError(t, os.WriteFile(path.Join(tmpDir, "workspace.codefly.yaml"),
+		[]byte("name: test\nlayout: modules\nmodules:\n    - name: mod\n      path: mod\n"), 0o644))
 	networkManager, err := network.NewRuntimeManager(ctx, nil)
 	require.NoError(t, err)
 	networkManager.WithTemporaryPorts()
