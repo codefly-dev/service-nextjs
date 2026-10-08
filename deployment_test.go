@@ -384,7 +384,7 @@ func httpMapping(builder *Builder, identity *basev0.ServiceIdentity, name string
 			Module:     builder.HttpEndpoint.GetModule(),
 			Service:    builder.HttpEndpoint.GetService(),
 			Api:        standards.HTTP,
-			Visibility: resources.VisibilityPublic,
+			Visibility: resources.VisibilityPublic, Exposure: resources.ExposurePublic,
 		},
 		Instances: []*basev0.NetworkInstance{containerInstance(port)},
 	}
