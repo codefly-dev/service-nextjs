@@ -939,7 +939,19 @@ func (s *Runtime) testEnvironment(ctx context.Context, suite string) ([]*resourc
 		if _, err := resources.ResolveServiceDependencyEndpoints(dependency, s.dependencyEndpoints); err != nil {
 			return nil, fmt.Errorf("test dependency context: %w", err)
 		}
-		endpoints, err := resources.ConsumedDependencyEndpoints(s.Identity.Module, dependency, s.dependencyEndpoints)
+		// core v0.15.0: every holder of dependency addresses judges them with the
+		// composition that carries both ends, or refuses them as unjudged. The
+		// agent's composition is the workspace above the service directory, the
+		// same one core's own builder base judges with (core#721).
+		workspace, workspaceErr := resources.FindWorkspaceUpFrom(ctx, s.Location)
+		if workspaceErr != nil {
+			return nil, workspaceErr
+		}
+		if workspace == nil {
+			return nil, fmt.Errorf("%w: service %s at %s is loaded outside any workspace, so its dependency endpoints cannot be judged",
+				resources.ErrUnjudgedProvenance, s.Identity.Name, s.Location)
+		}
+		endpoints, err := resources.ConsumedDependencyEndpoints(workspace, s.Identity.Module, dependency, s.dependencyEndpoints)
 		if err != nil {
 			return nil, err
 		}

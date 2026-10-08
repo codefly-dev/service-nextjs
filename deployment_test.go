@@ -336,7 +336,14 @@ func TestDeployServiceNamesPortsOnlyWhenMoreThanOne(t *testing.T) {
 			Instances: []*basev0.NetworkInstance{containerInstance(9090)},
 		},
 		{
-			Endpoint:  &basev0.Endpoint{Name: "public", Module: identity.Module, Service: identity.Name, Api: standards.HTTP, Visibility: resources.VisibilityExternal},
+			Endpoint: &basev0.Endpoint{Name: "public", Module: identity.Module, Service: identity.Name, Api: standards.HTTP, Visibility: resources.VisibilityPublic,
+				// `external` was a VISIBILITY before core v0.14.0 and is a LOCATION
+				// now: the endpoint lives outside the workspace, so the system
+				// allocates it no address and this Service never publishes it —
+				// which is what this case is here to assert. Core refuses
+				// exposure `public` beside location `external` for the same
+				// reason, so the exposure is `none`.
+				Location: resources.LocationExternal, Exposure: resources.ExposureNone},
 			Instances: []*basev0.NetworkInstance{containerInstance(9091)},
 		},
 	}
@@ -384,7 +391,7 @@ func httpMapping(builder *Builder, identity *basev0.ServiceIdentity, name string
 			Module:     builder.HttpEndpoint.GetModule(),
 			Service:    builder.HttpEndpoint.GetService(),
 			Api:        standards.HTTP,
-			Visibility: resources.VisibilityPublic,
+			Visibility: resources.VisibilityPublic, Exposure: resources.ExposurePublic,
 		},
 		Instances: []*basev0.NetworkInstance{containerInstance(port)},
 	}

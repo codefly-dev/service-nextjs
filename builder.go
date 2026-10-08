@@ -791,7 +791,14 @@ func (s *Builder) CreateEndpoints(ctx context.Context) error {
 		return s.Wool.Wrapf(err, "cannot load http api")
 	}
 	endpoint := s.Base.BaseEndpoint(standards.HTTP)
+	// Since core v0.14.0 an endpoint declares two independent axes and a
+	// PUBLIC one must state both: visibility is reach, exposure is
+	// addressing. A frontend's http endpoint is the one a browser reaches,
+	// which is exactly exposure public. Without it core refuses the manifest
+	// this agent itself wrote — "declares visibility public but states no
+	// exposure" — and the service then has no endpoints at all.
 	endpoint.Visibility = resources.VisibilityPublic
+	endpoint.Exposure = resources.ExposurePublic
 	s.HttpEndpoint, err = resources.NewAPI(ctx, endpoint, resources.ToHTTPAPI(httpAPI))
 	if err != nil {
 		return s.Wool.Wrapf(err, "cannot create http endpoint")
