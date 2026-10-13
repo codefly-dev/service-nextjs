@@ -1,6 +1,6 @@
 # Working in codefly-dev/service-nextjs
 
-`github.com/codefly-dev/service-nextjs` (Go 1.27.0) is the codefly **service
+`github.com/codefly-dev/service-nextjs` (Go 1.27.2) is the codefly **service
 agent** for Next.js and Node frontends. `main()` registers one service as Agent,
 Builder, Runtime, Code and Tooling with `agents.Serve`, and GoReleaser ships it
 as the binary core downloads. It owns what is Next.js-specific: the scaffolded
@@ -57,7 +57,7 @@ Fleet standard — [handbook#68](https://github.com/obin-ai/handbook/issues/68).
 
 Derived from `.github/workflows/ci.yml`, which delegates to the reusable
 `codefly-dev/core/.github/workflows/go-service-ci.yml@main`. CI reads the Go
-version from `go.mod` (1.27.0) and caches nothing.
+version from `go.mod` (1.27.2) and caches nothing.
 
 ```bash
 go build ./...          # CI: build

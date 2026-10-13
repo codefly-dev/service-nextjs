@@ -912,8 +912,9 @@ func (s *Runtime) Test(ctx context.Context, req *runtimev0.TestRequest) (*runtim
 		return s.completedConsoleTestResult(req.Suite, runnerKind, args, consoleOutput, duration, runErr)
 	}
 
-	s.Wool.Forwardf("Tests: %s", run.LegacyTestSummary().SummaryLine())
 	response := run.ToProtoResponse(string(runnerKind), req.Suite, duration)
+	counts := response.GetCounts()
+	s.Wool.Forwardf("Tests: %d passed, %d failed, %d skipped", counts.GetPassed(), counts.GetFailed()+counts.GetErrored(), counts.GetSkipped())
 	if recoveryErr != nil {
 		response.Output = fmt.Sprintf("automatic Playwright browser recovery failed: %v", recoveryErr)
 	}
