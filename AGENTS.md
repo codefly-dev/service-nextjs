@@ -56,7 +56,7 @@ Fleet standard — [handbook#68](https://github.com/obin-ai/handbook/issues/68).
 ## Build and test
 
 Derived from `.github/workflows/ci.yml`, which delegates to the reusable
-`codefly-dev/core/.github/workflows/go-service-ci.yml@main`. CI reads the Go
+`codefly-dev/core/.github/workflows/go-service-ci.yml@v0.19.4`. CI reads the Go
 version from `go.mod` (1.27.2) and caches nothing.
 
 ```bash

@@ -6,7 +6,7 @@ description: Run the gates CI runs for codefly-dev/service-nextjs before pushing
 # Verifying a change to this agent
 
 CI is `.github/workflows/ci.yml`. It delegates most of itself to
-`codefly-dev/core/.github/workflows/go-service-ci.yml@main` and
+`codefly-dev/core/.github/workflows/go-service-ci.yml@v0.19.4` and
 `codefly-dev/.github/.github/workflows/plugin-manifest-guard.yml@main`, so the
 commands are not visible in this repo. They are below. Run the ones that cover
 what you touched, and say in the PR which you did not run.
