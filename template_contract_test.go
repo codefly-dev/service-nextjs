@@ -40,16 +40,16 @@ func TestFactoryTemplateUsesExplicitApplicationOwnedComposition(t *testing.T) {
 	if manifest.Scripts["fix"] != "biome check --write ." || manifest.Scripts["format"] != "biome format --write ." {
 		t.Fatalf("safe fix scripts = fix:%q format:%q", manifest.Scripts["fix"], manifest.Scripts["format"])
 	}
-	if manifest.DevDependencies["@biomejs/biome"] != "^2.5.4" {
+	if manifest.DevDependencies["@biomejs/biome"] != "^2.5.15" {
 		t.Fatalf("Biome version = %q", manifest.DevDependencies["@biomejs/biome"])
 	}
 	if manifest.DevDependencies["babel-plugin-react-compiler"] != "1.0.0" {
 		t.Fatalf("React Compiler version = %q", manifest.DevDependencies["babel-plugin-react-compiler"])
 	}
 	for name, version := range map[string]string{
-		"next":      "16.3.6",
-		"react":     "19.2.8",
-		"react-dom": "19.2.8",
+		"next":      "16.4.1",
+		"react":     "19.3.1",
+		"react-dom": "19.3.1",
 	} {
 		if manifest.Dependencies[name] != version {
 			t.Fatalf("%s version = %q, want %q", name, manifest.Dependencies[name], version)
@@ -61,7 +61,7 @@ func TestFactoryTemplateUsesExplicitApplicationOwnedComposition(t *testing.T) {
 		}
 	}
 	biomeConfig, err := fs.ReadFile(factoryFS, "templates/factory/code/biome.json")
-	if err != nil || !strings.Contains(string(biomeConfig), "schemas/2.5.4/schema.json") {
+	if err != nil || !strings.Contains(string(biomeConfig), "schemas/2.5.15/schema.json") {
 		t.Fatalf("Biome config is missing or unpinned: err=%v content=%s", err, biomeConfig)
 	}
 	if manifest.Overrides["postcss"] != "8.5.28" {
