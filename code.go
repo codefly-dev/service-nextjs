@@ -274,12 +274,14 @@ func (l *nodePackageLock) resolvedVersion(name string) string {
 }
 
 // externalLinks returns, in order, the directories the lock links from
-// outside sourceDir (a `file:` dependency on a sibling package), relative to
-// sourceDir as the lock records them (npm writes them relative; an absolute
-// one is kept as written). npm installs a linked package's own
-// dependencies only when it sits inside the project (a workspace); one outside
-// gets a symlink and nothing else, so its source resolves none of its imports
-// until its own lock is installed where it lives.
+// outside sourceDir (a `file:` dependency on a sibling package), as the lock
+// records them: npm writes a relative path, and a `file:` prefix is dropped so
+// a lock that spells the same link `file:../remote` names the same directory.
+// npm installs a linked package's own dependencies only when it sits inside
+// the project (a workspace); one outside gets a symlink and nothing else, so
+// its source resolves none of its imports until its own lock is installed
+// where it lives. Where the link may point is the runtime's call, not this
+// reader's: see Runtime.linkedPackageTarget.
 func (l *nodePackageLock) externalLinks() []string {
 	if l == nil {
 		return nil
@@ -290,7 +292,7 @@ func (l *nodePackageLock) externalLinks() []string {
 		if !entry.Link || entry.Resolved == "" {
 			continue
 		}
-		relative := filepath.Clean(filepath.FromSlash(entry.Resolved))
+		relative := filepath.Clean(filepath.FromSlash(strings.TrimPrefix(entry.Resolved, "file:")))
 		if filepath.IsLocal(relative) || seen[relative] {
 			continue
 		}

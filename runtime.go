@@ -50,6 +50,9 @@ type Runtime struct {
 	projectKind         nodeProjectKind
 	dependencyEndpoints []*basev0.Endpoint
 	dependencyMappings  []*basev0.NetworkMapping
+	// containerLinkWarning keeps the container-run limitation to one line per
+	// run: Init, Build and Test each ensure dependencies.
+	containerLinkWarning sync.Once
 }
 
 func NewRuntime(service *Service) *Runtime {
@@ -1199,19 +1202,28 @@ func (s *Runtime) ensureLinkedNodeDependencies(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	for _, link := range lock.externalLinks() {
-		target := link
-		if !filepath.IsAbs(target) {
-			target = filepath.Join(s.sourceLocation, link)
-		}
-		if s.Runtime.IsContainerRuntime() {
-			// The container mounts the service root and caches node_modules
-			// per platform; a package linked beside the source is neither, so a
-			// container run says it is left uninstalled rather than writing
-			// this platform's binaries into the host's tree.
+	links := lock.externalLinks()
+	if len(links) == 0 {
+		return nil
+	}
+	if s.Runtime.IsContainerRuntime() {
+		// The container mounts the service root and caches node_modules per
+		// platform; a package linked beside the source is neither, so a
+		// container run says it is left uninstalled rather than writing this
+		// platform's binaries into the host's tree. Once: the lockfile is read
+		// again by Init, Build and Test, and the limitation does not change
+		// between them.
+		s.containerLinkWarning.Do(func() {
 			s.Wool.Warn("a container run does not install a linked package's dependencies",
-				wool.Field("package", filepath.ToSlash(link)))
-			continue
+				wool.Field("packages", slashed(links)))
+		})
+		return nil
+	}
+	root := s.linkedPackageRoot()
+	for _, link := range links {
+		target, err := linkedPackageTarget(s.sourceLocation, root, link)
+		if err != nil {
+			return err
 		}
 		if info, err := os.Stat(filepath.Join(target, "node_modules")); err == nil && info.IsDir() {
 			continue
@@ -1221,6 +1233,68 @@ func (s *Runtime) ensureLinkedNodeDependencies(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// linkedPackageTarget resolves where the lock's link lives, and refuses one
+// that would take the install outside root. Installing a package writes its
+// node_modules and runs its lifecycle scripts, so the agent does that only in
+// a tree the service owns: an absolute target, which names a directory with no
+// relation to the source, and a `..` chain that climbs out of root are both
+// refused by name rather than installed somewhere else.
+func linkedPackageTarget(sourceLocation, root, link string) (string, error) {
+	if filepath.IsAbs(link) {
+		return "", fmt.Errorf(
+			"linked package %s is refused: the lock names an absolute directory, and a package linked beside the source is resolved relative to %s",
+			filepath.ToSlash(link), sourceLocation)
+	}
+	target := filepath.Clean(filepath.Join(sourceLocation, link))
+	if !containedIn(root, target) {
+		return "", fmt.Errorf(
+			"linked package %s is refused: it resolves to %s, outside %s",
+			filepath.ToSlash(link), target, root)
+	}
+	return target, nil
+}
+
+// linkedPackageRoot is the tree a linked package has to stay inside: the
+// workspace the service belongs to, which core resolves and hands the agent in
+// its identity. A source tree attached from outside that workspace is its own
+// bound, because nothing above it is known to be the service's.
+func (s *Runtime) linkedPackageRoot() string {
+	source := physicalPath(s.sourceLocation)
+	if s.Identity != nil {
+		if workspace := physicalPath(s.Identity.WorkspacePath); workspace != "" && containedIn(workspace, source) {
+			return workspace
+		}
+	}
+	return source
+}
+
+// containedIn reports, lexically, whether dir is root or sits under it.
+func containedIn(root, dir string) bool {
+	relative, err := filepath.Rel(root, dir)
+	return err == nil && filepath.IsLocal(relative)
+}
+
+// physicalPath resolves a directory through symlinks, as the source location
+// already is, so a containment check compares like with like.
+func physicalPath(dir string) string {
+	if dir == "" {
+		return ""
+	}
+	if physical, err := filepath.EvalSymlinks(dir); err == nil {
+		return physical
+	}
+	return filepath.Clean(dir)
+}
+
+// slashed reports paths the way a lockfile spells them.
+func slashed(paths []string) []string {
+	spelled := make([]string, 0, len(paths))
+	for _, path := range paths {
+		spelled = append(spelled, filepath.ToSlash(path))
+	}
+	return spelled
 }
 
 // installNodeDependencies runs npm's install for the package at dir, from the
