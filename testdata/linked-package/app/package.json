@@ -1,0 +1,7 @@
+{
+  "name": "linked-package-app",
+  "private": true,
+  "dependencies": {
+    "remote": "file:../../remote"
+  }
+}

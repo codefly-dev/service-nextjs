@@ -1181,12 +1181,58 @@ func (s *Runtime) ensureNodeDependencies(ctx context.Context) error {
 	if s.runnerEnvironment == nil {
 		return fmt.Errorf("runner environment is not initialized")
 	}
-	if s.nodeDependenciesPresent(ctx) {
-		return nil
+	if !s.nodeDependenciesPresent(ctx) {
+		if err := s.installNodeDependencies(ctx, s.sourceLocation); err != nil {
+			return err
+		}
 	}
+	return s.ensureLinkedNodeDependencies(ctx)
+}
+
+// ensureLinkedNodeDependencies installs, where it lives, each package the
+// lockfile links from outside the source directory (a `file:` dependency on a
+// sibling package) that has none installed yet. npm links such a package and
+// installs nothing of its own (`npm install <folder>`), so an application that
+// compiles its source would resolve none of its imports.
+func (s *Runtime) ensureLinkedNodeDependencies(ctx context.Context) error {
+	lock, err := readNodePackageLock(s.sourceLocation)
+	if err != nil {
+		return err
+	}
+	for _, link := range lock.externalLinks() {
+		target := link
+		if !filepath.IsAbs(target) {
+			target = filepath.Join(s.sourceLocation, link)
+		}
+		if s.Runtime.IsContainerRuntime() {
+			// The container mounts the service root and caches node_modules
+			// per platform; a package linked beside the source is neither, so a
+			// container run says it is left uninstalled rather than writing
+			// this platform's binaries into the host's tree.
+			s.Wool.Warn("a container run does not install a linked package's dependencies",
+				wool.Field("package", filepath.ToSlash(link)))
+			continue
+		}
+		if info, err := os.Stat(filepath.Join(target, "node_modules")); err == nil && info.IsDir() {
+			continue
+		}
+		if err := s.installNodeDependencies(ctx, target); err != nil {
+			return fmt.Errorf("linked package %s: %w", filepath.ToSlash(link), err)
+		}
+	}
+	return nil
+}
+
+// installNodeDependencies runs npm's install for the package at dir, from the
+// source directory: `npm ci` when dir carries a lockfile, so it installs what
+// that lock records, and `npm install` otherwise.
+func (s *Runtime) installNodeDependencies(ctx context.Context, dir string) error {
 	args := []string{"install"}
-	if _, err := os.Stat(filepath.Join(s.sourceLocation, "package-lock.json")); err == nil {
+	if _, err := os.Stat(filepath.Join(dir, "package-lock.json")); err == nil {
 		args = []string{"ci"}
+	}
+	if dir != s.sourceLocation {
+		args = append(args, "--prefix", dir)
 	}
 	s.Wool.Info("installing Node.js dependencies", wool.Field("command", "npm "+strings.Join(args, " ")))
 	proc, err := s.runnerEnvironment.NewProcess("npm", args...)
