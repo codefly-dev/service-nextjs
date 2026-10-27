@@ -67,27 +67,55 @@ func TestRuntimeInstallsALinkSpelledWithTheFilePrefix(t *testing.T) {
 		"a `file:`-prefixed link is installed where it lives")
 }
 
-// A lock link that climbs out of the workspace is refused by name: installing
-// it would write node_modules into, and run the lifecycle scripts of, a tree
-// the service does not own.
-func TestRuntimeRefusesALinkedPackageOutsideTheWorkspace(t *testing.T) {
+// THE REGRESSION TEST. The fleet's playgrounds are a workspace nested inside
+// a checkout, linking a sibling that lives ABOVE that workspace root:
+// service-pdf's `playground` web links `../../../client/pdf-viewer`, and
+// module-robin's links `../../../../../modules/robin/frontend`. v0.0.168
+// refused both, because the fixture it was written against always put the
+// workspace above the linked package. The lockfile is the service's own
+// source: where it says its package lives is where the package lives.
+func TestRuntimeInstallsALinkedPackageAboveTheWorkspace(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
-	identity, environment := testIdentity(t, root)
-	source := filepath.Join(root, "mod", "frontend", "code")
+	identity, environment := testNestedWorkspaceIdentity(t, root)
+	source := filepath.Join(root, "playground", "mod", "frontend", "code")
+	remote := filepath.Join(root, "remote")
 	copyTestdata(t, filepath.Join("testdata", "linked-package", "app"), source)
-	writeAppLock(t, source, "../../../../escaped")
+	copyTestdata(t, filepath.Join("testdata", "linked-package", "remote"), remote)
+	// From the source: code -> frontend -> mod -> playground -> root.
+	writeAppLock(t, source, "../../../../remote")
 	require.NoError(t, os.MkdirAll(filepath.Join(source, "node_modules"), 0o755))
 
 	runtime := initializedNativeRuntime(t, ctx, identity, environment)
 
-	err := runtime.ensureNodeDependencies(ctx)
-	require.ErrorContains(t, err, "linked package ../../../../escaped is refused")
-	require.ErrorContains(t, err, "outside")
-	physical, evalErr := filepath.EvalSymlinks(root)
-	require.NoError(t, evalErr)
-	require.ErrorContains(t, err, physical)
-	require.NoDirExists(t, filepath.Join(filepath.Dir(physical), "escaped"))
+	require.NoError(t, runtime.ensureNodeDependencies(ctx))
+	require.FileExists(t, filepath.Join(remote, "node_modules", "leaf", "package.json"),
+		"a package the lock places above the workspace is installed where it lives")
+	require.Len(t, runtime.linkWarnings, 1, "and where it landed is named, once")
+}
+
+// The two layouts above, as the paths they actually are, through the function
+// that decides. Neither may be refused again.
+func TestLinkedPackageTargetFollowsTheLockAboveTheWorkspace(t *testing.T) {
+	for _, layout := range []struct{ name, source, root, link, want string }{
+		{
+			"service-pdf playground web",
+			"/repo/playground/services/web", "/repo/playground",
+			"../../../client/pdf-viewer", "/repo/client/pdf-viewer",
+		},
+		{
+			"module-robin playground web",
+			"/repo/playground/modules/robin-playground/services/web", "/repo/playground",
+			"../../../../../modules/robin/frontend", "/repo/modules/robin/frontend",
+		},
+	} {
+		t.Run(layout.name, func(t *testing.T) {
+			target, err := linkedPackageTarget(filepath.FromSlash(layout.source),
+				filepath.FromSlash(layout.root), filepath.FromSlash(layout.link), true)
+			require.NoError(t, err, "the lock says where its package lives")
+			require.Equal(t, filepath.FromSlash(layout.want), target)
+		})
+	}
 }
 
 // A directory inside the workspace may be a symlink out of it, and npm writes
@@ -115,11 +143,11 @@ func TestRuntimeRefusesALinkedPackageSymlinkedOutOfTheWorkspace(t *testing.T) {
 	require.NoDirExists(t, filepath.Join(outside, "node_modules"))
 }
 
-// With no workspace to bound the install, every external link is outside the
-// only tree known to be the service's — so they are named and skipped, the way
-// a container run names what it leaves uninstalled, rather than refused as if
-// the lock were wrong. A refusal has to say that the bound degraded.
-func TestRuntimeLeavesLinkedPackagesWithNoWorkspaceToBoundThem(t *testing.T) {
+// With no workspace to judge against, the lock is still the service's own
+// source: the package is installed where the lock says, and the line says
+// nothing bounded it. Skipping here would silently reinstate the
+// `Module not found` failure this install exists to fix.
+func TestRuntimeInstallsAndNamesALinkedPackageWithNoWorkspaceToBoundIt(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
 	identity, environment := testIdentity(t, root)
@@ -133,36 +161,33 @@ func TestRuntimeLeavesLinkedPackagesWithNoWorkspaceToBoundThem(t *testing.T) {
 	runtime.Identity.WorkspacePath = ""
 
 	require.NoError(t, runtime.ensureNodeDependencies(ctx))
-	require.NoDirExists(t, filepath.Join(remote, "node_modules"),
-		"nothing is installed on a guess")
-	require.Len(t, runtime.linkWarnings, 1)
+	require.FileExists(t, filepath.Join(remote, "node_modules", "leaf", "package.json"))
+	require.Len(t, runtime.linkWarnings, 1, "named once")
 
-	// Init, Build and Test each ensure dependencies: the same fact is reported
-	// once, and a lockfile that links something else is a different fact.
+	// Init, Build and Test each ensure dependencies: one line, not three.
 	require.NoError(t, runtime.ensureNodeDependencies(ctx))
 	require.Len(t, runtime.linkWarnings, 1)
-	writeAppLock(t, source, "../../other-remote")
-	require.NoError(t, runtime.ensureNodeDependencies(ctx))
-	require.Len(t, runtime.linkWarnings, 2)
 }
 
-// A container run installs nothing, but a lock pointing outside the workspace
-// is wrong in every run mode and is refused in all of them.
-func TestContainerRunStillRefusesALinkedPackageOutsideTheWorkspace(t *testing.T) {
+// A container run installs nothing, but a lock this agent refuses is refused
+// in every run mode: targets are resolved before the container check, so a
+// bad lock is not loud natively and silent in a container.
+func TestContainerRunStillRefusesALockItCannotHonour(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
 	identity, environment := testIdentity(t, root)
 	source := filepath.Join(root, "mod", "frontend", "code")
 	copyTestdata(t, filepath.Join("testdata", "linked-package", "app"), source)
-	writeAppLock(t, source, "../../../../escaped")
+	writeAppLock(t, source, "/elsewhere/repo")
 
 	runtime := initializedNativeRuntime(t, ctx, identity, environment)
 	runtime.Runtime.RuntimeContext = resources.NewRuntimeContextContainer()
 	require.True(t, runtime.Runtime.IsContainerRuntime())
 
 	err := runtime.ensureLinkedNodeDependencies(ctx)
-	require.ErrorContains(t, err, "linked package ../../../../escaped is refused")
-	require.Empty(t, runtime.linkWarnings, "a wrong lock is refused, not warned about")
+	require.ErrorContains(t, err, "linked package /elsewhere/repo is refused")
+	require.ErrorContains(t, err, "absolute")
+	require.Empty(t, runtime.linkWarnings, "a refused lock is refused, not warned about")
 }
 
 func TestLinkedPackageRootFallsBackToTheSourceWithNoWorkspace(t *testing.T) {
@@ -191,21 +216,20 @@ func TestLinkedPackageRootFallsBackToTheSourceWithNoWorkspace(t *testing.T) {
 	require.Equal(t, physicalPath(source), root)
 }
 
-func TestLinkedPackageTargetStaysUnderTheWorkspace(t *testing.T) {
-	root := filepath.FromSlash("/ws")
+// An absolute target is not the lock saying where its package lives: it names
+// a directory with no relation to the source, bound or unbound.
+func TestLinkedPackageTargetRefusesAnAbsoluteTarget(t *testing.T) {
 	source := filepath.FromSlash("/ws/mod/frontend/code")
+	root := filepath.FromSlash("/ws")
+	for _, bounded := range []bool{true, false} {
+		_, err := linkedPackageTarget(source, root, filepath.FromSlash("/elsewhere/repo"), bounded)
+		require.ErrorContains(t, err, "absolute")
+		require.ErrorContains(t, err, "/elsewhere/repo")
+	}
 
-	target, err := linkedPackageTarget(source, root, filepath.FromSlash("../../remote"))
+	target, err := linkedPackageTarget(source, root, filepath.FromSlash("../../remote"), true)
 	require.NoError(t, err)
 	require.Equal(t, filepath.FromSlash("/ws/mod/remote"), target)
-
-	_, err = linkedPackageTarget(source, root, filepath.FromSlash("/elsewhere/repo"))
-	require.ErrorContains(t, err, "absolute")
-	require.ErrorContains(t, err, "/elsewhere/repo")
-
-	_, err = linkedPackageTarget(source, root, filepath.FromSlash("../../../../escaped"))
-	require.ErrorContains(t, err, "../../../../escaped")
-	require.ErrorContains(t, err, "outside "+root)
 }
 
 func TestExternalLinksNameOnlyPackagesOutsideTheSource(t *testing.T) {
