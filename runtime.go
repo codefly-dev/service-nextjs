@@ -1207,23 +1207,11 @@ func (s *Runtime) ensureLinkedNodeDependencies(ctx context.Context) error {
 		return nil
 	}
 	root, bounded := s.linkedPackageRoot()
-	if !bounded {
-		// Nothing says where the service's tree ends, so nothing can judge
-		// where its lock points. Every external link is left uninstalled,
-		// named, with the bound that degraded stated rather than implied —
-		// the application then fails to resolve the import, as it does in a
-		// container run, instead of this agent writing somewhere on a guess.
-		s.warnLinksUninstalled(links,
-			"a linked package is not installed: the service carries no workspace path, so only its source directory is known to be its own",
-			wool.Field("source", root))
-		return nil
-	}
-	// Resolved before the container check below: a lock that points outside
-	// the workspace is refused in every run mode, not only in the one that
-	// would have installed it.
+	// Resolved before the container check below, so a lock this agent refuses
+	// is refused in every run mode, not only in the one that would install it.
 	targets := make([]string, 0, len(links))
 	for _, link := range links {
-		target, err := linkedPackageTarget(s.sourceLocation, root, link)
+		target, err := linkedPackageTarget(s.sourceLocation, root, link, bounded)
 		if err != nil {
 			return err
 		}
@@ -1238,6 +1226,9 @@ func (s *Runtime) ensureLinkedNodeDependencies(ctx context.Context) error {
 		return nil
 	}
 	for index, target := range targets {
+		if !containedIn(root, target) {
+			s.warnLinkAboveWorkspace(links[index], target, root, bounded)
+		}
 		if info, err := os.Stat(filepath.Join(target, "node_modules")); err == nil && info.IsDir() {
 			continue
 		}
@@ -1249,52 +1240,81 @@ func (s *Runtime) ensureLinkedNodeDependencies(ctx context.Context) error {
 }
 
 // warnLinksUninstalled reports packages left uninstalled, once per reason and
-// link set: Init, Build and Test each ensure dependencies, and repeating one
-// line three times is noise, while a later phase whose lockfile links
-// something else is a different fact and is still reported. The caller holds
-// dependenciesMu.
+// link set.
 func (s *Runtime) warnLinksUninstalled(links []string, reason string, fields ...*wool.LogField) {
 	spelled := slashed(links)
-	reported := reason + "\x00" + strings.Join(spelled, ",")
-	if s.linkWarnings[reported] {
+	s.warnOnce(reason+"\x00"+strings.Join(spelled, ","), reason,
+		append([]*wool.LogField{wool.Field("packages", spelled)}, fields...)...)
+}
+
+// warnOnce reports a fact about the lockfile's links once per key. Init, Build
+// and Test each ensure dependencies, and repeating one line three times is
+// noise, while a later phase whose lockfile links something else carries a
+// different key and is still reported. The caller holds dependenciesMu.
+func (s *Runtime) warnOnce(key, reason string, fields ...*wool.LogField) {
+	if s.linkWarnings[key] {
 		return
 	}
 	if s.linkWarnings == nil {
 		s.linkWarnings = map[string]bool{}
 	}
-	s.linkWarnings[reported] = true
-	s.Wool.Warn(reason, append([]*wool.LogField{wool.Field("packages", spelled)}, fields...)...)
+	s.linkWarnings[key] = true
+	s.Wool.Warn(reason, fields...)
 }
 
-// linkedPackageTarget resolves where the lock's link lives, and refuses one
-// that would take the install outside root. Installing a package writes its
-// node_modules and runs its lifecycle scripts, so the agent does that only in
-// a tree the service owns: an absolute target, which names a directory with no
-// relation to the source, and a `..` chain that climbs out of root are both
-// refused by name rather than installed somewhere else. The target is judged
-// where the filesystem puts it, not where the lock spells it, so a directory
-// inside the workspace that symlinks out of it is refused too.
-func linkedPackageTarget(sourceLocation, root, link string) (string, error) {
+// linkedPackageTarget resolves where the lock's link lives.
+//
+// A lock MAY name a package above the workspace, and routinely does: a
+// playground workspace nested in a checkout links a sibling that lives beside
+// the checkout's other modules. Refusing that broke the case this install
+// exists to serve, so it is installed and named instead — the lockfile is the
+// service's own source, and `npm ci` on it already runs lifecycle scripts, so
+// a package above the workspace adds radius, not privilege.
+//
+// Two things are still refused, because neither is the lock saying where its
+// package lives:
+//   - an absolute target, which names a directory with no relation to the
+//     source;
+//   - a target the lock places INSIDE the workspace that the filesystem
+//     redirects outside it. The declaration and the destination disagree, and
+//     a reader of the lock cannot see where the install would land.
+func linkedPackageTarget(sourceLocation, root, link string, bounded bool) (string, error) {
 	if filepath.IsAbs(link) {
 		return "", fmt.Errorf(
 			"linked package %s is refused: the lock names an absolute directory, and a package linked beside the source is resolved relative to %s",
 			filepath.ToSlash(link), sourceLocation)
 	}
-	target := physicalTarget(filepath.Join(sourceLocation, link))
-	if !containedIn(root, target) {
+	declared := filepath.Clean(filepath.Join(sourceLocation, link))
+	target := physicalTarget(declared)
+	if bounded && containedIn(root, declared) && !containedIn(root, target) {
 		return "", fmt.Errorf(
-			"linked package %s is refused: it resolves to %s, outside %s",
-			filepath.ToSlash(link), target, root)
+			"linked package %s is refused: the lock places it at %s, inside %s, but it resolves through a symlink to %s, outside it",
+			filepath.ToSlash(link), declared, root, target)
 	}
 	return target, nil
 }
 
-// linkedPackageRoot is the tree a linked package has to stay inside: the
-// workspace the service belongs to, which core resolves and hands the agent in
-// its identity. It reports false when there is none to bound with — then the
-// source directory is all that is known to be the service's, and since every
-// external link is by definition outside it, there is nothing to judge a link
-// against rather than nothing to install.
+// warnLinkAboveWorkspace names a package the lock puts outside the workspace
+// before it is installed there: the install writes node_modules and runs that
+// package's lifecycle scripts, so where it lands is said out loud rather than
+// inferred from a lock-relative path.
+func (s *Runtime) warnLinkAboveWorkspace(link, target, root string, bounded bool) {
+	reason := "a linked package is installed above the workspace, where the lockfile points"
+	if !bounded {
+		reason = "a linked package is installed outside the source directory, and no workspace bounds where the lockfile may point"
+	}
+	s.warnOnce("above\x00"+target, reason,
+		wool.Field("package", filepath.ToSlash(link)),
+		wool.Field("installs_at", target),
+		wool.Field("bound", root))
+}
+
+// linkedPackageRoot is the workspace the service belongs to, which core
+// resolves and hands the agent in its identity: the tree a linked package is
+// expected to sit inside, and whose edge is worth naming when one does not.
+// It reports false when there is no workspace to judge against at all, so a
+// link is then installed and named rather than measured against the source
+// directory, which every external link is outside of by definition.
 func (s *Runtime) linkedPackageRoot() (string, bool) {
 	source := physicalPath(s.sourceLocation)
 	if s.Identity == nil {
