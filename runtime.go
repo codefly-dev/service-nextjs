@@ -50,9 +50,9 @@ type Runtime struct {
 	projectKind         nodeProjectKind
 	dependencyEndpoints []*basev0.Endpoint
 	dependencyMappings  []*basev0.NetworkMapping
-	// containerLinkWarning keeps the container-run limitation to one line per
-	// run: Init, Build and Test each ensure dependencies.
-	containerLinkWarning sync.Once
+	// linkWarnings remembers which uninstalled-linked-package reasons have
+	// been reported, for which link set. Guarded by dependenciesMu.
+	linkWarnings map[string]bool
 }
 
 func NewRuntime(service *Service) *Runtime {
@@ -1206,33 +1206,64 @@ func (s *Runtime) ensureLinkedNodeDependencies(ctx context.Context) error {
 	if len(links) == 0 {
 		return nil
 	}
-	if s.Runtime.IsContainerRuntime() {
-		// The container mounts the service root and caches node_modules per
-		// platform; a package linked beside the source is neither, so a
-		// container run says it is left uninstalled rather than writing this
-		// platform's binaries into the host's tree. Once: the lockfile is read
-		// again by Init, Build and Test, and the limitation does not change
-		// between them.
-		s.containerLinkWarning.Do(func() {
-			s.Wool.Warn("a container run does not install a linked package's dependencies",
-				wool.Field("packages", slashed(links)))
-		})
+	root, bounded := s.linkedPackageRoot()
+	if !bounded {
+		// Nothing says where the service's tree ends, so nothing can judge
+		// where its lock points. Every external link is left uninstalled,
+		// named, with the bound that degraded stated rather than implied —
+		// the application then fails to resolve the import, as it does in a
+		// container run, instead of this agent writing somewhere on a guess.
+		s.warnLinksUninstalled(links,
+			"a linked package is not installed: the service carries no workspace path, so only its source directory is known to be its own",
+			wool.Field("source", root))
 		return nil
 	}
-	root := s.linkedPackageRoot()
+	// Resolved before the container branch: a lock that points outside the
+	// workspace is refused in every run mode, not only in the one that would
+	// have installed it.
+	targets := make([]string, 0, len(links))
 	for _, link := range links {
 		target, err := linkedPackageTarget(s.sourceLocation, root, link)
 		if err != nil {
 			return err
 		}
+		targets = append(targets, target)
+	}
+	if s.Runtime.IsContainerRuntime() {
+		// The container mounts the service root and caches node_modules per
+		// platform; a package linked beside the source is neither, so a
+		// container run says it is left uninstalled rather than writing this
+		// platform's binaries into the host's tree.
+		s.warnLinksUninstalled(links, "a container run does not install a linked package's dependencies")
+		return nil
+	}
+	for index, target := range targets {
 		if info, err := os.Stat(filepath.Join(target, "node_modules")); err == nil && info.IsDir() {
 			continue
 		}
 		if err := s.installNodeDependencies(ctx, target); err != nil {
-			return fmt.Errorf("linked package %s: %w", filepath.ToSlash(link), err)
+			return fmt.Errorf("linked package %s: %w", filepath.ToSlash(links[index]), err)
 		}
 	}
 	return nil
+}
+
+// warnLinksUninstalled reports packages left uninstalled, once per reason and
+// link set: Init, Build and Test each ensure dependencies, and repeating one
+// line three times is noise, while a later phase whose lockfile links
+// something else is a different fact and is still reported. The caller holds
+// dependenciesMu.
+func (s *Runtime) warnLinksUninstalled(links []string, reason string, fields ...*wool.LogField) {
+	spelled := slashed(links)
+	reported := reason + "\x00" + strings.Join(spelled, ",")
+	if s.linkWarnings[reported] {
+		return
+	}
+	if s.linkWarnings == nil {
+		s.linkWarnings = map[string]bool{}
+	}
+	s.linkWarnings[reported] = true
+	s.Wool.Warn(reason, append([]*wool.LogField{wool.Field("packages", spelled)}, fields...)...)
 }
 
 // linkedPackageTarget resolves where the lock's link lives, and refuses one
@@ -1240,14 +1271,16 @@ func (s *Runtime) ensureLinkedNodeDependencies(ctx context.Context) error {
 // node_modules and runs its lifecycle scripts, so the agent does that only in
 // a tree the service owns: an absolute target, which names a directory with no
 // relation to the source, and a `..` chain that climbs out of root are both
-// refused by name rather than installed somewhere else.
+// refused by name rather than installed somewhere else. The target is judged
+// where the filesystem puts it, not where the lock spells it, so a directory
+// inside the workspace that symlinks out of it is refused too.
 func linkedPackageTarget(sourceLocation, root, link string) (string, error) {
 	if filepath.IsAbs(link) {
 		return "", fmt.Errorf(
 			"linked package %s is refused: the lock names an absolute directory, and a package linked beside the source is resolved relative to %s",
 			filepath.ToSlash(link), sourceLocation)
 	}
-	target := filepath.Clean(filepath.Join(sourceLocation, link))
+	target := physicalTarget(filepath.Join(sourceLocation, link))
 	if !containedIn(root, target) {
 		return "", fmt.Errorf(
 			"linked package %s is refused: it resolves to %s, outside %s",
@@ -1258,16 +1291,42 @@ func linkedPackageTarget(sourceLocation, root, link string) (string, error) {
 
 // linkedPackageRoot is the tree a linked package has to stay inside: the
 // workspace the service belongs to, which core resolves and hands the agent in
-// its identity. A source tree attached from outside that workspace is its own
-// bound, because nothing above it is known to be the service's.
-func (s *Runtime) linkedPackageRoot() string {
+// its identity. It reports false when there is none to bound with — then the
+// source directory is all that is known to be the service's, and since every
+// external link is by definition outside it, there is nothing to judge a link
+// against rather than nothing to install.
+func (s *Runtime) linkedPackageRoot() (string, bool) {
 	source := physicalPath(s.sourceLocation)
-	if s.Identity != nil {
-		if workspace := physicalPath(s.Identity.WorkspacePath); workspace != "" && containedIn(workspace, source) {
-			return workspace
-		}
+	if s.Identity == nil {
+		return source, false
 	}
-	return source
+	workspace := physicalPath(s.Identity.WorkspacePath)
+	if workspace == "" || !containedIn(workspace, source) {
+		// A source tree attached from outside the workspace is its own bound,
+		// because nothing above it is known to be the service's either.
+		return source, false
+	}
+	return workspace, true
+}
+
+// physicalTarget resolves dir through symlinks as far as it exists, keeping
+// the part that does not. npm writes where the filesystem leads, so a
+// directory inside the workspace that links out of it is judged on where it
+// lands, not on the path that names it.
+func physicalTarget(dir string) string {
+	dir = filepath.Clean(dir)
+	var missing []string
+	for existing := dir; ; {
+		if physical, err := filepath.EvalSymlinks(existing); err == nil {
+			return filepath.Join(append([]string{physical}, missing...)...)
+		}
+		parent := filepath.Dir(existing)
+		if parent == existing {
+			return dir
+		}
+		missing = append([]string{filepath.Base(existing)}, missing...)
+		existing = parent
+	}
 }
 
 // containedIn reports, lexically, whether dir is root or sits under it.

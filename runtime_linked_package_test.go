@@ -90,6 +90,107 @@ func TestRuntimeRefusesALinkedPackageOutsideTheWorkspace(t *testing.T) {
 	require.NoDirExists(t, filepath.Join(filepath.Dir(physical), "escaped"))
 }
 
+// A directory inside the workspace may be a symlink out of it, and npm writes
+// where the filesystem leads: containment is judged on what the target
+// resolves to, not on the path the lock spells.
+func TestRuntimeRefusesALinkedPackageSymlinkedOutOfTheWorkspace(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "elsewhere")
+	require.NoError(t, os.MkdirAll(outside, 0o755))
+	identity, environment := testIdentity(t, root)
+	source := filepath.Join(root, "mod", "frontend", "code")
+	copyTestdata(t, filepath.Join("testdata", "linked-package", "app"), source)
+	require.NoError(t, os.MkdirAll(filepath.Join(source, "node_modules"), 0o755))
+	// `mod/remote` is inside the workspace by name only.
+	require.NoError(t, os.Symlink(outside, filepath.Join(root, "mod", "remote")))
+
+	runtime := initializedNativeRuntime(t, ctx, identity, environment)
+
+	err := runtime.ensureNodeDependencies(ctx)
+	require.ErrorContains(t, err, "linked package ../../remote is refused")
+	physical, evalErr := filepath.EvalSymlinks(outside)
+	require.NoError(t, evalErr)
+	require.ErrorContains(t, err, physical)
+	require.NoDirExists(t, filepath.Join(outside, "node_modules"))
+}
+
+// With no workspace to bound the install, every external link is outside the
+// only tree known to be the service's — so they are named and skipped, the way
+// a container run names what it leaves uninstalled, rather than refused as if
+// the lock were wrong. A refusal has to say that the bound degraded.
+func TestRuntimeLeavesLinkedPackagesWithNoWorkspaceToBoundThem(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	identity, environment := testIdentity(t, root)
+	source := filepath.Join(root, "mod", "frontend", "code")
+	remote := filepath.Join(root, "mod", "remote")
+	copyTestdata(t, filepath.Join("testdata", "linked-package", "app"), source)
+	copyTestdata(t, filepath.Join("testdata", "linked-package", "remote"), remote)
+	require.NoError(t, os.MkdirAll(filepath.Join(source, "node_modules"), 0o755))
+
+	runtime := initializedNativeRuntime(t, ctx, identity, environment)
+	runtime.Identity.WorkspacePath = ""
+
+	require.NoError(t, runtime.ensureNodeDependencies(ctx))
+	require.NoDirExists(t, filepath.Join(remote, "node_modules"),
+		"nothing is installed on a guess")
+	require.Len(t, runtime.linkWarnings, 1)
+
+	// Init, Build and Test each ensure dependencies: the same fact is reported
+	// once, and a lockfile that links something else is a different fact.
+	require.NoError(t, runtime.ensureNodeDependencies(ctx))
+	require.Len(t, runtime.linkWarnings, 1)
+	writeAppLock(t, source, "../../other-remote")
+	require.NoError(t, runtime.ensureNodeDependencies(ctx))
+	require.Len(t, runtime.linkWarnings, 2)
+}
+
+// A container run installs nothing, but a lock pointing outside the workspace
+// is wrong in every run mode and is refused in all of them.
+func TestContainerRunStillRefusesALinkedPackageOutsideTheWorkspace(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	identity, environment := testIdentity(t, root)
+	source := filepath.Join(root, "mod", "frontend", "code")
+	copyTestdata(t, filepath.Join("testdata", "linked-package", "app"), source)
+	writeAppLock(t, source, "../../../../escaped")
+
+	runtime := initializedNativeRuntime(t, ctx, identity, environment)
+	runtime.Runtime.RuntimeContext = resources.NewRuntimeContextContainer()
+	require.True(t, runtime.Runtime.IsContainerRuntime())
+
+	err := runtime.ensureLinkedNodeDependencies(ctx)
+	require.ErrorContains(t, err, "linked package ../../../../escaped is refused")
+	require.Empty(t, runtime.linkWarnings, "a wrong lock is refused, not warned about")
+}
+
+func TestLinkedPackageRootFallsBackToTheSourceWithNoWorkspace(t *testing.T) {
+	workspace := t.TempDir()
+	source := filepath.Join(workspace, "mod", "frontend", "code")
+	require.NoError(t, os.MkdirAll(source, 0o755))
+
+	runtime := NewRuntime(NewService())
+	runtime.setSourceLocation(source)
+
+	runtime.Identity = &resources.ServiceIdentity{WorkspacePath: workspace}
+	root, bounded := runtime.linkedPackageRoot()
+	require.True(t, bounded)
+	require.Equal(t, physicalPath(workspace), root)
+
+	runtime.Identity = &resources.ServiceIdentity{}
+	root, bounded = runtime.linkedPackageRoot()
+	require.False(t, bounded)
+	require.Equal(t, physicalPath(source), root)
+
+	// A source tree attached from outside the workspace bounds nothing above
+	// itself either.
+	runtime.Identity = &resources.ServiceIdentity{WorkspacePath: t.TempDir()}
+	root, bounded = runtime.linkedPackageRoot()
+	require.False(t, bounded)
+	require.Equal(t, physicalPath(source), root)
+}
+
 func TestLinkedPackageTargetStaysUnderTheWorkspace(t *testing.T) {
 	root := filepath.FromSlash("/ws")
 	source := filepath.FromSlash("/ws/mod/frontend/code")
