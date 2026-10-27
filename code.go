@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 
@@ -240,7 +241,9 @@ func readNodePackageManifest(sourceDir string) (*nodePackageManifest, error) {
 type nodePackageLock struct {
 	LockfileVersion int `json:"lockfileVersion"`
 	Packages        map[string]struct {
-		Version string `json:"version"`
+		Version  string `json:"version"`
+		Resolved string `json:"resolved"`
+		Link     bool   `json:"link"`
 	} `json:"packages"`
 }
 
@@ -268,6 +271,34 @@ func (l *nodePackageLock) resolvedVersion(name string) string {
 		return ""
 	}
 	return l.Packages["node_modules/"+name].Version
+}
+
+// externalLinks returns, in order, the directories the lock links from
+// outside sourceDir (a `file:` dependency on a sibling package), relative to
+// sourceDir as the lock records them (npm writes them relative; an absolute
+// one is kept as written). npm installs a linked package's own
+// dependencies only when it sits inside the project (a workspace); one outside
+// gets a symlink and nothing else, so its source resolves none of its imports
+// until its own lock is installed where it lives.
+func (l *nodePackageLock) externalLinks() []string {
+	if l == nil {
+		return nil
+	}
+	seen := map[string]bool{}
+	var links []string
+	for _, entry := range l.Packages {
+		if !entry.Link || entry.Resolved == "" {
+			continue
+		}
+		relative := filepath.Clean(filepath.FromSlash(entry.Resolved))
+		if filepath.IsLocal(relative) || seen[relative] {
+			continue
+		}
+		seen[relative] = true
+		links = append(links, relative)
+	}
+	sort.Strings(links)
+	return links
 }
 
 // declaredVersion reports the constraint package.json states for a dependency,
