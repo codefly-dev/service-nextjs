@@ -5,10 +5,10 @@ description: Cut a release of the service-nextjs agent binary, or work out why a
 
 # Releasing this agent
 
-A release is a **tag on `main`**. `.github/workflows/releaser.yml` fires on
-`v*`, runs `go test -v ./...`, then runs GoReleaser inside
-`ghcr.io/goreleaser/goreleaser-cross`. Nothing else cuts tags — there is no
-release workflow to trigger and no automation that bumps the version.
+A release is a **tag on `main`**, and `codefly publish` is what makes it.
+`.github/workflows/releaser.yml` fires on `v*`, runs `go test -v ./...`, then
+runs GoReleaser inside `ghcr.io/goreleaser/goreleaser-cross`. The tag is the
+trigger; nothing dispatches that workflow.
 
 ## The contract
 
@@ -25,23 +25,35 @@ Three things must agree, and only the first two are visible in the diff:
 ## The walk
 
 ```bash
-# 1. pin the core release this agent is verified against
-go get github.com/codefly-dev/core@v0.3.NN && go mod tidy
-# 2. bump agent.codefly.yaml to the new version
-# 3. prove it — including the gates the plain suite hides (see verify-changes)
-go build ./... && go vet ./... && go mod tidy -diff && go test ./...
+# from a clean, up-to-date clone of main
+codefly publish patch            # or minor / major; --dry-run prints the version
 ```
 
-Open the PR with both changes together (`chore: prepare Next.js v0.0.N for
-current core` is the house phrasing), merge it, then tag that merge commit:
+`publish` is the whole release, not half of it: it bumps `agent.codefly.yaml`,
+lands that bump on main through a release pull request, runs release-grade
+agent CI against the bumped version, then tags the commit main ends up
+carrying, pushes that tag, and creates the GitHub release with the loader
+archives and SBOMs. Pre-flight aborts cleanly, with no side effects, when the
+tree is dirty, the branch is not `main`, it is behind origin, or the tag
+already exists.
+
+**Never `git tag` by hand.** A hand tag skips every gate above — that is how a
+release shipped from a commit whose CI had never run. If the release pull
+request merges but the tag push then fails, re-run `publish`: it recognizes the
+untagged release commit and finishes it rather than bumping again. Never start
+a second `publish` while one is still waiting, or the re-run opens the NEXT
+bump instead of tagging the one on main.
+
+Never move a published tag: the downloader resolves a version to an artifact,
+so re-pointing a tag changes what an already-pinned consumer gets.
+
+Pin core in its own PR before releasing — the version bump is `publish`'s to
+write, not yours:
 
 ```bash
-git tag -a v0.0.N -m "v0.0.N" && git push origin v0.0.N
+go get github.com/codefly-dev/core@vX.Y.Z && go mod tidy
+go build ./... && go vet ./... && go mod tidy -diff && go test ./...   # see verify-changes
 ```
-
-Never tag a commit that is not on `main`, and never move a published tag: the
-downloader resolves a version to an artifact, so re-pointing a tag changes what
-an already-pinned consumer gets.
 
 ## Why the release build is not `go build`
 
@@ -60,6 +72,9 @@ requirement.
 - **Core downloads an old version.** Compare the three items above before
   suspecting core. A version bumped in `agent.codefly.yaml` but never tagged
   publishes nothing, and leaves no failure anywhere.
+- **The version bumped but no tag exists.** Re-run `codefly publish`; it
+  finishes the untagged release commit. Do not tag it by hand, and do not bump
+  again.
 - **The release job fails in `test`.** The release gate is untagged
   `go test -v ./...` — the same suite as CI, so a failure here is a real
   regression that the merge should not have carried.
