@@ -1218,9 +1218,9 @@ func (s *Runtime) ensureLinkedNodeDependencies(ctx context.Context) error {
 			wool.Field("source", root))
 		return nil
 	}
-	// Resolved before the container branch: a lock that points outside the
-	// workspace is refused in every run mode, not only in the one that would
-	// have installed it.
+	// Resolved before the container check below: a lock that points outside
+	// the workspace is refused in every run mode, not only in the one that
+	// would have installed it.
 	targets := make([]string, 0, len(links))
 	for _, link := range links {
 		target, err := linkedPackageTarget(s.sourceLocation, root, link)
