@@ -117,3 +117,52 @@ func TestNextConfiguredStandaloneOutput(t *testing.T) {
 		})
 	}
 }
+
+// A successful build script is not evidence that a pre-existing static export
+// came from this build. Exercise the real Next config loader with a no-op script.
+func TestNextExportRejectsStaleOutput(t *testing.T) {
+	if os.Getenv("CODEFLY_TEST_NEXT_BUILD") != "1" {
+		t.Skip("set CODEFLY_TEST_NEXT_BUILD=1 for real npm/Next config")
+	}
+	root := physicalPath(t.TempDir())
+	app := filepath.Join(root, "source")
+	buildInputWrite(t, app, "package.json", `{"name":"export-freshness-fixture","private":true,"scripts":{"build":"node -e \"require('fs').writeFileSync('build-invoked','yes')\""},"dependencies":{"next":"16.4.1","react":"19.2.4","react-dom":"19.2.4"}}`)
+	helper, err := fs.ReadFile(builderFS, "templates/builder/context/next-build.cjs.tmpl")
+	require.NoError(t, err)
+	buildInputWrite(t, root, "next-build.cjs", string(helper))
+	run := func(args ...string) (string, error) {
+		cmd := exec.CommandContext(t.Context(), args[0], args[1:]...)
+		cmd.Dir = app
+		cmd.Env = append(os.Environ(), "NODE_ENV=production", "NEXT_TELEMETRY_DISABLED=1", "npm_config_cache="+filepath.Join(root, "npm-cache"))
+		data, err := cmd.CombinedOutput()
+		return string(data), err
+	}
+	out, err := run("npm", "install", "--include=dev", "--no-audit", "--no-fund")
+	require.NoError(t, err, "%s", out)
+	for _, test := range []struct{ name, dist, export string }{{"default", ".next", "out"}, {"custom", ".export-build", ".export-build"}} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Cleanup(func() { _ = os.Remove(filepath.Join(app, "build-invoked")) })
+			buildInputWrite(t, app, "next.config.mjs", `export default {output:'export',distDir:'`+test.dist+`'};`)
+			sentinel := "stale export must survive refusal"
+			buildInputWrite(t, app, filepath.Join(test.export, "index.html"), sentinel)
+			runtime := filepath.Join(root, "runtime-"+test.name)
+			out, err := run("node", filepath.Join(root, "next-build.cjs"), app, runtime, "export")
+			require.Error(t, err, "stale export accepted: %s", out)
+			require.Contains(t, out, "overlaps staged input")
+			data, err := os.ReadFile(filepath.Join(app, test.export, "index.html"))
+			require.NoError(t, err)
+			require.Equal(t, sentinel, string(data))
+			require.NoDirExists(t, runtime)
+			require.NoFileExists(t, filepath.Join(app, "build-invoked"))
+			// After removing only this fixture's stale export, a successful no-op still
+			// cannot publish output: the exact current export destination must exist.
+			require.NoError(t, os.RemoveAll(filepath.Join(app, test.export)))
+			out, err = run("node", filepath.Join(root, "next-build.cjs"), app, runtime, "export")
+			require.Error(t, err)
+			require.Contains(t, out, test.export)
+			require.NoDirExists(t, runtime)
+			require.FileExists(t, filepath.Join(app, "build-invoked"))
+			require.NoError(t, os.Remove(filepath.Join(app, "build-invoked")))
+		})
+	}
+}

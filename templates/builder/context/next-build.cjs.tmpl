@@ -23,17 +23,22 @@ async function build() {
   if (path.isAbsolute(config.distDir) || dist === app || !inside(app, dist)) throw Error('distDir must be a child of the application');
   const tracing = fs.realpathSync(config.outputFileTracingRoot || app);
   if (!inside(source, tracing) || !inside(tracing, app)) throw Error('tracing root must contain the application within projected inputs');
-  // Staging excludes host Next outputs. Refuse to erase any remaining admitted
-  // source or install-script output, even if config names it as distDir.
-  if (fs.existsSync(dist) && fs.readdirSync(dist).length) throw Error(`distDir overlaps staged input: ${dist}`);
-  fs.rmSync(dist, { recursive: true, force: true });
+  // Next exports to out by default, or to the configured non-default distDir.
+  const exported = path.resolve(app, config.distDir === '.next' ? 'out' : config.distDir);
+  const outputs = new Set(mode === 'export' ? [dist, exported] : [dist]);
+  // Refuse every nonempty destination before removing even an empty directory.
+  // A successful no-op build must never publish a pre-existing host export.
+  for (const directory of outputs) {
+    if (fs.existsSync(directory) && fs.readdirSync(directory).length) {
+      throw Error(`${directory === dist ? 'distDir' : 'export destination'} overlaps staged input: ${directory}`);
+    }
+  }
+  for (const directory of outputs) fs.rmSync(directory, { recursive: true, force: true });
   const result = spawnSync('npm', ['run', 'build'], { cwd: app, stdio: 'inherit', env: process.env });
   if (result.error) throw result.error;
   if (result.status !== 0) throw Error(`npm build failed: ${result.status}`);
   if (fs.existsSync(runtime)) throw Error('runtime destination already exists');
   if (mode === 'export') {
-    // Next uses distDir as the export destination when it is non-default.
-    const exported = path.join(app, config.distDir === '.next' ? 'out' : config.distDir);
     fs.cpSync(exported, runtime, { recursive: true, dereference: true });
     return;
   }

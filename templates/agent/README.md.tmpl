@@ -97,7 +97,10 @@ recognized Next output directories (containing `required-server-files.json`)
 are excluded. Such host metadata is used only to exclude artifacts, never to
 select production output. Inside the isolated build, Next selects the exact
 production directory; any remaining nonempty staged directory at that path is
-refused rather than deleted. Missing or inconsistent fresh output fails the build.
+refused rather than deleted. Static export also guards its exact destination
+(`out` by default, or the configured non-default `distDir`) before invoking the
+build. A successful no-op cannot publish a host export. Missing or inconsistent
+fresh output fails the build.
 
 The recipe uses Core's existing OUTPUT context and TREE inventory (v4). The CLI
 must support that contract and executes the build. Only the marked generated
