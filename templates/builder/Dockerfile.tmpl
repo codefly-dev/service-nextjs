@@ -16,32 +16,22 @@ RUN apk add --no-cache libc6-compat \
     && apk info -v | sort > /codefly/apk-packages.txt
 WORKDIR /app
 
-COPY code/package.json code/package-lock.json* ./
-# npm workspaces are part of the install graph. Copy their complete package
-# sources before npm ci so additive application packages behave the same in
-# local CI and the production container build.
-COPY code/packages ./packages
+# The configured application root owns its complete install graph, including
+# any npm workspaces. A project need not have the scaffold's packages/ directory.
+# The recipe ignore policy excludes host installs at every depth.
+COPY {{.SourceCopy}}
 RUN npm ci
 
 # Build
 FROM base AS builder
 WORKDIR /app
-COPY code/ .
+# Keep the source and all lock-derived installs together, including dependencies
+# nested under custom workspace directories that npm could not hoist.
+COPY --from=deps /app/ ./
 # Codefly applications may verify generated service dependencies during their
 # build. Keep the service manifest available to that deterministic check without
 # copying it into the final runtime image.
 COPY service.codefly.yaml /service.codefly.yaml
-# The Codefly archive builder may receive a service tree that already contains
-# host node_modules. Remove it before restoring the clean, lock-derived install;
-# otherwise host-absolute .bin symlinks can shadow the container executables.
-RUN rm -rf node_modules
-COPY --from=deps /app/node_modules ./node_modules
-# npm nests a workspace's dependency under packages/<name>/node_modules when its
-# version conflicts with one hoisted to the root. Those installs exist only in
-# the deps stage (host copies are excluded from the context), so restore the
-# workspace packages from there too, or the build resolves the hoisted version
-# instead. The sources are the same context files the deps stage copied.
-COPY --from=deps /app/packages ./packages
 
 ENV NEXT_TELEMETRY_DISABLED=1
 {{range .BuildArgs}}

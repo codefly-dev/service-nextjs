@@ -69,3 +69,12 @@ The value must be a positive duration no greater than ten minutes.
 ## Build
 
 The service builds as a standalone Docker image for production deployment.
+The build context is the service directory. The recipe uses `spec.source-dir`
+(`code` by default, or `.` for an application at the service root) and installs
+the complete application tree with `npm ci`. Workspaces keep their declared
+directory names; a `packages/` directory is not required. Host `node_modules`
+and `.next` trees are excluded at every depth. The builder stage receives the
+same source and clean install, including nested workspace dependencies.
+Source edits therefore invalidate the dependency layer as well as the build
+layer. A source path outside the service context is refused; the recipe does
+not copy sibling projects from outside that context.

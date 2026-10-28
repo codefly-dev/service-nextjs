@@ -2,9 +2,12 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -16,6 +19,86 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 )
+
+// A recipe's context is the service directory. Attached projects can put their
+// package.json there instead of in code/, and need not declare packages/*.
+func TestBuildRecipeUsesConfiguredSourceDirectory(t *testing.T) {
+	for _, test := range []struct{ name, setting, source, workspace string }{
+		{"scaffold", "", "code", "packages/widget"},
+		{"code without workspaces", "", "code", ""},
+		{"service root", ".", ".", ""},
+		{"custom source and workspace", "web ui", "web ui", "extensions/widget"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			identity, _ := testIdentity(t, root)
+			service := filepath.Join(root, "mod", "frontend")
+			if test.setting != "" {
+				declaration := filepath.Join(service, "service.codefly.yaml")
+				data, err := os.ReadFile(declaration)
+				require.NoError(t, err)
+				data = append(data, []byte(fmt.Sprintf("\nspec:\n  source-dir: %q\n", test.setting))...)
+				require.NoError(t, os.WriteFile(declaration, data, 0o644))
+			}
+			project := filepath.Join(service, test.source)
+			require.NoError(t, os.MkdirAll(project, 0o755))
+			manifest := `{"name":"fixture","private":true}`
+			if test.workspace != "" {
+				manifest = fmt.Sprintf(`{"name":"fixture","private":true,"workspaces":[%q]}`, test.workspace)
+				member := filepath.Join(project, test.workspace)
+				require.NoError(t, os.MkdirAll(member, 0o755))
+				require.NoError(t, os.WriteFile(filepath.Join(member, "package.json"), []byte(`{"name":"widget","version":"1.0.0"}`), 0o644))
+			}
+			require.NoError(t, os.WriteFile(filepath.Join(project, "package.json"), []byte(manifest), 0o644))
+			require.NoError(t, os.WriteFile(filepath.Join(project, "package-lock.json"), []byte(`{"lockfileVersion":3}`), 0o644))
+			builder := NewBuilder(NewService())
+			_, err := builder.Load(t.Context(), &builderv0.LoadRequest{Identity: identity, CreationMode: &builderv0.CreationMode{Communicate: false}})
+			require.NoError(t, err)
+			// Render through the same Build RPC used by the CLI, then check every
+			// context COPY against real files, including projects without packages/.
+			output := t.TempDir()
+			response, err := builder.Build(t.Context(), &builderv0.BuildRequest{OutputDirectory: output,
+				BuildContext: &builderv0.BuildContext{Kind: &builderv0.BuildContext_DockerBuildContext{DockerBuildContext: &builderv0.DockerBuildContext{DockerRepository: "registry.example.com"}}}})
+			require.NoError(t, err)
+			require.Equal(t, builderv0.BuildStatus_SUCCESS, response.GetState().GetState())
+			require.Equal(t, ".", response.GetResult().GetDockerBuildPlan().GetRecipes()[0].GetContext())
+			require.NoError(t, services.VerifyDockerBuildPlan(output, response.GetResult().GetDockerBuildPlan()))
+			data, err := os.ReadFile(filepath.Join(output, "Dockerfile"))
+			require.NoError(t, err)
+			for _, line := range strings.Split(string(data), "\n") {
+				if !strings.HasPrefix(line, "COPY ") || strings.Contains(line, "--from=") {
+					continue
+				}
+				operands := strings.Fields(strings.TrimPrefix(line, "COPY "))
+				if strings.HasPrefix(strings.TrimPrefix(line, "COPY "), "[") {
+					require.NoError(t, json.Unmarshal([]byte(strings.TrimPrefix(line, "COPY ")), &operands))
+				}
+				for _, input := range operands[:len(operands)-1] {
+					matches, err := filepath.Glob(filepath.Join(service, input))
+					require.NoError(t, err)
+					require.NotEmpty(t, matches, "recipe input %q absent from service context (%s)", input, line)
+				}
+			}
+		})
+	}
+}
+
+func TestBuildRecipeRefusesSourceOutsideServiceContext(t *testing.T) {
+	identity, _ := testIdentity(t, t.TempDir())
+	builder := NewBuilder(NewService())
+	_, err := builder.Load(t.Context(), &builderv0.LoadRequest{Identity: identity, CreationMode: &builderv0.CreationMode{Communicate: false}})
+	require.NoError(t, err)
+	for _, source := range []string{"../sibling", t.TempDir()} {
+		builder.Settings.SourceDir = source
+		output := filepath.Join(t.TempDir(), "recipe")
+		response, err := builder.Build(t.Context(), &builderv0.BuildRequest{OutputDirectory: output,
+			BuildContext: &builderv0.BuildContext{Kind: &builderv0.BuildContext_DockerBuildContext{DockerBuildContext: &builderv0.DockerBuildContext{DockerRepository: "registry.example.com"}}}})
+		require.NoError(t, err)
+		require.Equal(t, builderv0.BuildStatus_ERROR, response.GetState().GetState())
+		require.Contains(t, response.GetState().GetMessage(), "inside the service build context")
+		require.NoDirExists(t, output)
+	}
+}
 
 // When the CLI sends an output_directory, Build renders the recipe there and
 // returns a DockerBuildPlan the CLI can verify and buildx, instead of running

@@ -408,10 +408,17 @@ func generatedFiles(root string) (map[string]generatedFile, error) {
 type DockerTemplating struct {
 	NodeImage string
 	Static    bool
+	SourceDir string
 	// BuildArgs are the declared build-arg names, sorted. The Dockerfile declares
 	// each as an ARG and promotes it to an ENV in the build stage so `next build`
 	// reads it; the value is supplied at build time via --build-arg.
 	BuildArgs []string
+}
+
+// JSON COPY syntax preserves spaces and quotes in the declared source path.
+func (d DockerTemplating) SourceCopy() string {
+	encoded, _ := json.Marshal([]string{d.SourceDir, "./"})
+	return string(encoded)
 }
 
 // NodeImage matches the tested SaaS Starter frontend build substrate. Keeping
@@ -444,9 +451,14 @@ func (s *Builder) Build(ctx context.Context, req *builderv0.BuildRequest) (*buil
 		return s.Builder.BuildError(fmt.Errorf("invalid docker image name: %s", image.Name))
 	}
 
+	sourceDir := filepath.Clean(s.Settings.NodeSourceDir())
+	if !filepath.IsLocal(sourceDir) {
+		return s.Builder.BuildError(fmt.Errorf("source-dir %q must stay inside the service build context", s.Settings.NodeSourceDir()))
+	}
 	docker := DockerTemplating{
 		NodeImage: NodeImage,
 		Static:    s.Settings.IsStatic(),
+		SourceDir: filepath.ToSlash(sourceDir),
 		BuildArgs: s.Settings.BuildArgKeys(),
 	}
 

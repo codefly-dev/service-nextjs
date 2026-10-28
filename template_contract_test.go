@@ -126,31 +126,30 @@ func TestBuilderTemplateInstallsWorkspaceGraphReproducibly(t *testing.T) {
 	source := string(dockerfile)
 	for _, required := range []string{
 		"FROM {{.NodeImage}} AS base",
-		"COPY code/packages ./packages",
+		"COPY {{.SourceCopy}}",
 		"COPY service.codefly.yaml /service.codefly.yaml",
 		"RUN npm ci",
-		"RUN rm -rf node_modules",
 		"RUN mkdir -p public && npm run build",
 	} {
 		if !strings.Contains(source, required) {
 			t.Fatalf("Dockerfile template missing %q", required)
 		}
 	}
-	if strings.Index(source, "COPY code/packages ./packages") > strings.Index(source, "RUN npm ci") {
-		t.Fatal("workspace packages must be copied before npm ci")
-	}
-	sourceCopy := strings.LastIndex(source, "COPY code/ .")
-	cleanInstall := strings.Index(source, "RUN rm -rf node_modules")
-	dependencyCopy := strings.LastIndex(source, "COPY --from=deps /app/node_modules ./node_modules")
+	copySource := strings.Index(source, "COPY {{.SourceCopy}}")
+	install := strings.Index(source, "RUN npm ci")
+	copyInstalled := strings.Index(source, "COPY --from=deps /app/ ./")
 	build := strings.Index(source, "RUN mkdir -p public && npm run build")
-	if sourceCopy < 0 || !(sourceCopy < cleanInstall && cleanInstall < dependencyCopy && dependencyCopy < build) {
-		t.Fatal("builder must replace host node_modules with the clean dependency layer before build")
+	if !(copySource < install && install < copyInstalled && copyInstalled < build) {
+		t.Fatal("build must use the complete source and clean workspace installs from the dependency stage")
 	}
-	// A workspace dependency npm could not hoist lives in
-	// packages/<name>/node_modules, which only the deps stage has.
-	workspaceCopy := strings.LastIndex(source, "COPY --from=deps /app/packages ./packages")
-	if workspaceCopy < 0 || !(sourceCopy < workspaceCopy && workspaceCopy < build) {
-		t.Fatal("builder must restore the workspace packages' nested installs from the deps stage before build")
+	ignore, err := fs.ReadFile(builderFS, "templates/builder/dockerignore.tmpl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, excluded := range []string{"**/node_modules", "**/.next", "**/.git"} {
+		if !strings.Contains(string(ignore), excluded) {
+			t.Fatalf("recipe must exclude host artifacts at every source/workspace depth: %s", excluded)
+		}
 	}
 	if strings.Contains(source, "node:{{.NodeVersion}}") {
 		t.Fatal("Dockerfile template must not use the floating Node major tag")
@@ -168,7 +167,7 @@ func TestBuilderTemplateInstallsWorkspaceGraphReproducibly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse Dockerfile template: %v", err)
 	}
-	if err := parsed.Execute(rendered, DockerTemplating{NodeImage: NodeImage}); err != nil {
+	if err := parsed.Execute(rendered, DockerTemplating{SourceDir: "code", NodeImage: NodeImage}); err != nil {
 		t.Fatalf("render Dockerfile template: %v", err)
 	}
 	if !strings.HasPrefix(rendered.String(), "FROM "+NodeImage+" AS base") {
@@ -192,6 +191,7 @@ func TestBuilderTemplateRendersDeclaredBuildArgsBeforeBuild(t *testing.T) {
 	// the build step so `next build` reads it.
 	rendered := &bytes.Buffer{}
 	if err := parsed.Execute(rendered, DockerTemplating{
+		SourceDir: "code",
 		NodeImage: NodeImage,
 		BuildArgs: []string{"FRONTEND_SKIN_RUNTIME", "OTHER_FLAG"},
 	}); err != nil {
@@ -214,7 +214,7 @@ func TestBuilderTemplateRendersDeclaredBuildArgsBeforeBuild(t *testing.T) {
 
 	// With no build-args declared, no stray ARG/ENV is emitted.
 	bare := &bytes.Buffer{}
-	if err := parsed.Execute(bare, DockerTemplating{NodeImage: NodeImage}); err != nil {
+	if err := parsed.Execute(bare, DockerTemplating{SourceDir: "code", NodeImage: NodeImage}); err != nil {
 		t.Fatalf("render Dockerfile template: %v", err)
 	}
 	if strings.Contains(bare.String(), "\nARG ") {
@@ -294,7 +294,7 @@ func TestRenderedDockerfilePinsEveryExternalImageByDigest(t *testing.T) {
 	fromLine := regexp.MustCompile(`(?im)^FROM\s+(?:--platform=\S+\s+)?(\S+)(?:\s+AS\s+(\S+))?[ \t]*$`)
 	for _, static := range []bool{true, false} {
 		rendered := &bytes.Buffer{}
-		if err := parsed.Execute(rendered, DockerTemplating{NodeImage: NodeImage, Static: static}); err != nil {
+		if err := parsed.Execute(rendered, DockerTemplating{SourceDir: "code", NodeImage: NodeImage, Static: static}); err != nil {
 			t.Fatalf("static=%v: render Dockerfile: %v", static, err)
 		}
 		out := rendered.String()
@@ -382,7 +382,7 @@ func TestBuilderTemplateRecordsTheResolvedOSPackageSetInBothRunners(t *testing.T
 	}
 	for _, static := range []bool{true, false} {
 		rendered := &bytes.Buffer{}
-		if err := parsed.Execute(rendered, DockerTemplating{NodeImage: NodeImage, Static: static}); err != nil {
+		if err := parsed.Execute(rendered, DockerTemplating{SourceDir: "code", NodeImage: NodeImage, Static: static}); err != nil {
 			t.Fatalf("static=%v: render Dockerfile: %v", static, err)
 		}
 		// Evidence that stays in a discarded build stage is not evidence.
