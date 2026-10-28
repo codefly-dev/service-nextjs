@@ -86,6 +86,47 @@ source is the hack this repo's rules forbid.
 
 ## A skip is not a pass
 
+### Actual native agent ownership
+
+Core v0.19.10 supplies the authenticated-v2 native writer and identity-bound
+stop/recovery APIs. This agent consumes them through its existing native runner;
+already-installed binaries retain the Core they were built with.
+
+After changing Core or the native lifecycle, build this checkout through
+`codefly agent build --native-only` with a disposable OS `HOME` and
+`CODEFLY_HOME`. Select the intended Core graph with `agent deps --pin` for a
+published version; a source-adjacent `go.work` proves only that local source
+graph and requires a packager that honours the CLI's prepared workfile.
+Use an isolated source packager installation, never overwrite a shared agent.
+Then qualify those exact installed bytes:
+
+```bash
+SERVICE_NEXTJS_NATIVE_AGENT_HOME=/absolute/disposable/codefly-home \
+SERVICE_NEXTJS_QUALIFICATION_CLI=/absolute/reviewed/codefly \
+  go test -run '^TestNativeAgentOwnershipLifecycle$' -count=1 -v .
+```
+
+This opt-in gate loads the installed agent through Core's authenticated manager
+and drives real Next.js applications through gRPC Load/Init/Start/Stop/restart.
+It checks that Start's RPC lifetime does not own the workload, ordinary Stop
+removes the registered group, and the actual writer records authenticated-v2
+ownership. It kills only the exact disposable agent owner, recovers its orphan
+through CLI preview/expect, and verifies an independently launched sibling's
+process births remain unchanged. Core owns authentication, process inspection,
+signalling and registry removal; this agent adds no recovery mechanism.
+
+The test isolates OS HOME (Core's registry) from the supplied installation home.
+It needs npm, Node, network access for the fixture's pinned dependencies, and a
+CLI implementing the reviewed recovery contract. It bypasses sandbox/principal
+policy explicitly. It does not qualify Linux when run on macOS, Docker, Nix,
+full CLI composition, or a published release. Record binary/SBOM/CLI hashes and
+embedded Core metadata with the result; a local manifest version is not proof
+of publication. Missing opt-in inputs produce a skip, never qualification.
+The ownership proof covers the tracked npm process group. Next.js 16.4.1 can
+briefly start a detached telemetry flush helper even with telemetry disabled;
+that helper is outside this group contract. Fixture-home deletion retries handle
+its filesystem race without claiming or signalling an unrelated process.
+
 These exclude themselves and report success:
 
 | Test | Runs only when |
