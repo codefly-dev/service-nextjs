@@ -14,42 +14,30 @@ FROM base AS deps
 RUN apk add --no-cache libc6-compat \
     && mkdir -p /codefly \
     && apk info -v | sort > /codefly/apk-packages.txt
-WORKDIR /app
+WORKDIR /src
 
-COPY code/package.json code/package-lock.json* ./
-# npm workspaces are part of the install graph. Copy their complete package
-# sources before npm ci so additive application packages behave the same in
-# local CI and the production container build.
-COPY code/packages ./packages
+# Only declared package/archive roots are projected here, with their topology.
+# Source precedes installs because npm lifecycle scripts can require it.
+COPY src/ /src/
+{{range .InstallWorkdirs}}
+WORKDIR {{.}}
 RUN npm ci
+{{end}}
 
-# Build
+# Build with the complete set of clean installs, including linked packages.
 FROM base AS builder
-WORKDIR /app
-COPY code/ .
-# Codefly applications may verify generated service dependencies during their
-# build. Keep the service manifest available to that deterministic check without
-# copying it into the final runtime image.
+COPY --from=deps /src/ /src/
+WORKDIR {{.AppWorkdir}}
 COPY service.codefly.yaml /service.codefly.yaml
-# The Codefly archive builder may receive a service tree that already contains
-# host node_modules. Remove it before restoring the clean, lock-derived install;
-# otherwise host-absolute .bin symlinks can shadow the container executables.
-RUN rm -rf node_modules
-COPY --from=deps /app/node_modules ./node_modules
-# npm nests a workspace's dependency under packages/<name>/node_modules when its
-# version conflicts with one hoisted to the root. Those installs exist only in
-# the deps stage (host copies are excluded from the context), so restore the
-# workspace packages from there too, or the build resolves the hoisted version
-# instead. The sources are the same context files the deps stage copied.
-COPY --from=deps /app/packages ./packages
-
+COPY next-build.cjs /codefly/next-build.cjs
+ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 {{range .BuildArgs}}
 ARG {{.}}
 ENV {{.}}=${{.}}
 {{- end}}
 
-RUN mkdir -p public && npm run build
+RUN node /codefly/next-build.cjs /src /codefly/runtime {{if .Static}}export{{else}}standalone{{end}}
 
 {{if .Static}}
 # Static: serve with nginx.
@@ -58,9 +46,9 @@ RUN mkdir -p public && npm run build
 # readable and so the dependency-update automation bumps the two together. The
 # digest is the multi-arch index that linux/amd64 and linux/arm64 both resolve
 # through; a single-platform digest would not satisfy the recipe's platforms.
-FROM nginx:1.31.6-alpine@sha256:df221db836e1754089190208cee7eeda94f233197056426eda74a43ab1abeac2 AS runner
+FROM nginx:1.31.7-alpine@sha256:892bb2152464f0c5d8972593a5f5afaf8054552580b699d95f8ff4af08c2d33d AS runner
 
-COPY --from=builder /app/out /usr/share/nginx/html
+COPY --from=builder /codefly/runtime/ /usr/share/nginx/html
 COPY --from=deps /codefly/apk-packages.txt /codefly/apk-packages.txt
 
 EXPOSE 80
@@ -69,7 +57,7 @@ CMD ["nginx", "-g", "daemon off;"]
 {{else}}
 # SSR: standalone Node.js server
 FROM base AS runner
-WORKDIR /app
+WORKDIR {{.RuntimeWorkdir}}
 
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
@@ -83,13 +71,7 @@ RUN rm -rf /usr/local/lib/node_modules/npm \
 RUN addgroup --system --gid 1001 nodejs
 RUN adduser --system --uid 1001 --ingroup nodejs nextjs
 
-COPY --from=builder /app/public ./public
-
-RUN mkdir .next
-RUN chown nextjs:nodejs .next
-
-COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
-COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
+COPY --from=builder --chown=nextjs:nodejs /codefly/runtime/ /app/
 COPY --from=deps /codefly/apk-packages.txt /codefly/apk-packages.txt
 
 USER nextjs

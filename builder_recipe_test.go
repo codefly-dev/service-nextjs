@@ -2,9 +2,12 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -17,12 +20,94 @@ import (
 	"google.golang.org/grpc/status"
 )
 
+// A recipe projects its declared application inputs into the output directory. Attached projects can put their
+// package.json there instead of in code/, and need not declare packages/*.
+func TestBuildRecipeUsesConfiguredSourceDirectory(t *testing.T) {
+	for _, test := range []struct{ name, setting, source, workspace string }{
+		{"scaffold", "", "code", "packages/widget"},
+		{"code without workspaces", "", "code", ""},
+		{"service root", ".", ".", ""},
+		{"custom source and workspace", "web ui", "web ui", "extensions/widget"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			identity, _ := testIdentity(t, root)
+			service := filepath.Join(root, "mod", "frontend")
+			if test.setting != "" {
+				declaration := filepath.Join(service, "service.codefly.yaml")
+				data, err := os.ReadFile(declaration)
+				require.NoError(t, err)
+				data = append(data, []byte(fmt.Sprintf("\nspec:\n  source-dir: %q\n", test.setting))...)
+				require.NoError(t, os.WriteFile(declaration, data, 0o644))
+			}
+			project := filepath.Join(service, test.source)
+			require.NoError(t, os.MkdirAll(project, 0o755))
+			manifest := `{"name":"fixture","private":true}`
+			if test.workspace != "" {
+				manifest = fmt.Sprintf(`{"name":"fixture","private":true,"workspaces":[%q]}`, test.workspace)
+				member := filepath.Join(project, test.workspace)
+				require.NoError(t, os.MkdirAll(member, 0o755))
+				require.NoError(t, os.WriteFile(filepath.Join(member, "package.json"), []byte(`{"name":"widget","version":"1.0.0"}`), 0o644))
+			}
+			require.NoError(t, os.WriteFile(filepath.Join(project, "package.json"), []byte(manifest), 0o644))
+			require.NoError(t, os.WriteFile(filepath.Join(project, "package-lock.json"), []byte(`{"lockfileVersion":3}`), 0o644))
+			builder := NewBuilder(NewService())
+			_, err := builder.Load(t.Context(), &builderv0.LoadRequest{Identity: identity, CreationMode: &builderv0.CreationMode{Communicate: false}})
+			require.NoError(t, err)
+			// Render through the same Build RPC used by the CLI, then check every
+			// context COPY against real files, including projects without packages/.
+			output := t.TempDir()
+			response, err := builder.Build(t.Context(), &builderv0.BuildRequest{OutputDirectory: output,
+				BuildContext: &builderv0.BuildContext{Kind: &builderv0.BuildContext_DockerBuildContext{DockerBuildContext: &builderv0.DockerBuildContext{DockerRepository: "registry.example.com"}}}})
+			require.NoError(t, err)
+			require.Equal(t, builderv0.BuildStatus_SUCCESS, response.GetState().GetState())
+			require.Equal(t, "context", response.GetResult().GetDockerBuildPlan().GetRecipes()[0].GetContext())
+			require.NoError(t, services.VerifyDockerBuildPlan(output, response.GetResult().GetDockerBuildPlan()))
+			data, err := os.ReadFile(filepath.Join(output, "Dockerfile"))
+			require.NoError(t, err)
+			for _, line := range strings.Split(string(data), "\n") {
+				if !strings.HasPrefix(line, "COPY ") || strings.Contains(line, "--from=") {
+					continue
+				}
+				operands := strings.Fields(strings.TrimPrefix(line, "COPY "))
+				if strings.HasPrefix(strings.TrimPrefix(line, "COPY "), "[") {
+					require.NoError(t, json.Unmarshal([]byte(strings.TrimPrefix(line, "COPY ")), &operands))
+				}
+				for _, input := range operands[:len(operands)-1] {
+					matches, err := filepath.Glob(filepath.Join(output, "context", input))
+					require.NoError(t, err)
+					require.NotEmpty(t, matches, "recipe input %q absent from service context (%s)", input, line)
+				}
+			}
+		})
+	}
+}
+
+func TestBuildRecipeRefusesSourceOutsideServiceContext(t *testing.T) {
+	identity, _ := testIdentity(t, t.TempDir())
+	writeRecipePackage(t, filepath.Join(identity.WorkspacePath, identity.RelativeToWorkspace, "code"))
+	builder := NewBuilder(NewService())
+	_, err := builder.Load(t.Context(), &builderv0.LoadRequest{Identity: identity, CreationMode: &builderv0.CreationMode{Communicate: false}})
+	require.NoError(t, err)
+	for _, source := range []string{"../sibling", t.TempDir()} {
+		builder.Settings.SourceDir = source
+		output := filepath.Join(t.TempDir(), "recipe")
+		response, err := builder.Build(t.Context(), &builderv0.BuildRequest{OutputDirectory: output,
+			BuildContext: &builderv0.BuildContext{Kind: &builderv0.BuildContext_DockerBuildContext{DockerBuildContext: &builderv0.DockerBuildContext{DockerRepository: "registry.example.com"}}}})
+		require.NoError(t, err)
+		require.Equal(t, builderv0.BuildStatus_ERROR, response.GetState().GetState())
+		require.Contains(t, response.GetState().GetMessage(), "inside the service build context")
+		require.NoDirExists(t, output)
+	}
+}
+
 // When the CLI sends an output_directory, Build renders the recipe there and
 // returns a DockerBuildPlan the CLI can verify and buildx, instead of running
 // docker build in-process. The test never needs a docker daemon.
 func TestBuildEmitsRecipeWhenOutputDirectorySet(t *testing.T) {
 	ctx := context.Background()
 	identity, _ := testIdentity(t, t.TempDir())
+	writeRecipePackage(t, filepath.Join(identity.WorkspacePath, identity.RelativeToWorkspace, "code"))
 
 	builder := NewBuilder(NewService())
 	_, err := builder.Load(ctx, &builderv0.LoadRequest{
@@ -32,8 +117,7 @@ func TestBuildEmitsRecipeWhenOutputDirectorySet(t *testing.T) {
 	require.NoError(t, err)
 
 	output := t.TempDir()
-	// A leftover artifact in the output directory (e.g. an ignore file a prior
-	// interrupted CLI build staged) must not leak into the digested recipe tree.
+	// Unrelated caller-owned files survive and enter the whole TREE inventory.
 	require.NoError(t, os.WriteFile(filepath.Join(output, "Dockerfile.dockerignore"), []byte("stale"), 0o644))
 
 	response, err := builder.Build(ctx, &builderv0.BuildRequest{
@@ -51,26 +135,28 @@ func TestBuildEmitsRecipeWhenOutputDirectorySet(t *testing.T) {
 
 	plan := response.GetResult().GetDockerBuildPlan()
 	require.NotNil(t, plan)
-	require.Equal(t, services.DockerBuildRecipeContractVersion, plan.GetContractVersion())
+	require.Equal(t, services.DockerBuildRecipeContextContractVersion, plan.GetContractVersion())
 	require.Contains(t, plan.GetDigest(), "sha256:")
 
 	require.Len(t, plan.GetRecipes(), 1)
 	recipe := plan.GetRecipes()[0]
 	require.Equal(t, "frontend", recipe.GetName())
 	require.Equal(t, "Dockerfile", recipe.GetDockerfile())
-	require.Equal(t, ".", recipe.GetContext())
+	require.Equal(t, "context", recipe.GetContext())
+	require.Equal(t, builderv0.RecipeContextRoot_RECIPE_CONTEXT_ROOT_OUTPUT, recipe.GetContextRoot())
 	require.Equal(t, "dockerignore", recipe.GetDockerignore())
 	require.Equal(t, []string{"linux/amd64", "linux/arm64"}, recipe.GetPlatforms())
 	require.Contains(t, recipe.GetImage(), "registry.example.com/mod/frontend")
 
-	// The recipe tree is exactly what the agent rendered: the stale file is gone
-	// and never entered the plan inventory.
-	require.NoFileExists(t, filepath.Join(output, "Dockerfile.dockerignore"))
+	// TREE verification covers preserved caller files as well as generated files.
+	require.FileExists(t, filepath.Join(output, "Dockerfile.dockerignore"))
 	var inventory []string
 	for _, f := range plan.GetFiles() {
 		inventory = append(inventory, f.GetPath())
 	}
-	require.ElementsMatch(t, []string{"Dockerfile", "dockerignore"}, inventory)
+	require.Contains(t, inventory, "context/src/package.json")
+	require.Contains(t, inventory, "context/next-build.cjs")
+	require.Contains(t, inventory, "Dockerfile.dockerignore")
 
 	require.FileExists(t, filepath.Join(output, "Dockerfile"))
 	require.FileExists(t, filepath.Join(output, "dockerignore"))
@@ -92,6 +178,7 @@ func TestBuildEmitsRecipeWhenOutputDirectorySet(t *testing.T) {
 func TestBuildRecipeCarriesDeclaredBuildArgs(t *testing.T) {
 	ctx := context.Background()
 	identity, _ := testIdentity(t, t.TempDir())
+	writeRecipePackage(t, filepath.Join(identity.WorkspacePath, identity.RelativeToWorkspace, "code"))
 
 	builder := NewBuilder(NewService())
 	_, err := builder.Load(ctx, &builderv0.LoadRequest{
@@ -152,6 +239,7 @@ func TestRecipeBuildNegotiationOverGRPC(t *testing.T) {
 
 	root := t.TempDir()
 	identity, _ := testIdentity(t, root)
+	writeRecipePackage(t, filepath.Join(root, "mod", "frontend", "code"))
 	_, err = client.Load(ctx, &builderv0.LoadRequest{
 		Identity:     identity,
 		CreationMode: &builderv0.CreationMode{Communicate: false},
@@ -194,4 +282,11 @@ func TestRecipeBuildNegotiationOverGRPC(t *testing.T) {
 			require.NoDirExists(t, filepath.Join(root, "mod", "frontend", "builder"))
 		})
 	}
+}
+
+func writeRecipePackage(t *testing.T, dir string) {
+	t.Helper()
+	require.NoError(t, os.MkdirAll(dir, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "package.json"), []byte(`{"name":"fixture","version":"1.0.0"}`), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "package-lock.json"), []byte(`{"name":"fixture","version":"1.0.0","lockfileVersion":3,"packages":{"":{"name":"fixture","version":"1.0.0"}}}`), 0644))
 }
