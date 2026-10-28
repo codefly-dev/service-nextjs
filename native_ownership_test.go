@@ -241,6 +241,30 @@ func killNativeOwner(ctx context.Context, original runners.ProcessIdentity) erro
 	return runners.SignalProcess(ctx, current, syscall.SIGKILL)
 }
 
+// Core publishes the original birth before releasing its shell launch gate;
+// returning from StartTrackedProcessGroup does not mean the target has execed.
+// Wait only for that retained birth's expected execution state, never adopt a
+// newly observed identity. The manager-loaded agent already has its handshake.
+func nativeOwnerReady(ctx context.Context, group *runners.TrackedProcessGroup, original runners.ProcessIdentity) (bool, error) {
+	observation, err := group.InspectOwnership(ctx)
+	if err != nil {
+		return false, err
+	}
+	if !observation.Authenticated || !observation.OwnerAlive {
+		return false, runners.ErrProcessNotFound
+	}
+	for _, member := range observation.Members {
+		if member.PID != original.PID {
+			continue
+		}
+		if member.PGID != original.PGID || member.BootID != original.BootID || member.StartID != original.StartID {
+			return false, runners.ErrProcessNotFound
+		}
+		return member == original, nil
+	}
+	return false, runners.ErrProcessNotFound
+}
+
 func TestNativeOwnerSignalRejectsStaleBirth(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	cmd := exec.Command("sleep", "30")
@@ -254,13 +278,21 @@ func TestNativeOwnerSignalRejectsStaleBirth(t *testing.T) {
 		_ = group.RemoveIfDeadContext(cleanup)
 	})
 	original := group.Leader()
-	observation, err := group.InspectOwnership(t.Context())
-	require.NoError(t, err)
-	require.True(t, observation.Authenticated)
-	require.True(t, observation.OwnerAlive)
-	require.Contains(t, observation.Members, original)
+	waitNativeCondition(t, func() bool {
+		ready, err := nativeOwnerReady(t.Context(), group, original)
+		require.NoError(t, err)
+		return ready
+	})
 	stale := original
 	stale.StartID++
+	ready, err := nativeOwnerReady(t.Context(), group, stale)
+	require.ErrorIs(t, err, runners.ErrProcessNotFound)
+	require.False(t, ready, "readiness must not adopt a replacement birth")
+	cancelled, cancel := context.WithCancel(t.Context())
+	cancel()
+	ready, err = nativeOwnerReady(cancelled, group, original)
+	require.ErrorIs(t, err, context.Canceled)
+	require.False(t, ready, "cancelled readiness must not pass")
 	require.ErrorIs(t, killNativeOwner(t.Context(), stale), runners.ErrProcessNotFound)
 	current, err := runners.InspectProcess(original.PID)
 	require.NoError(t, err, "stale owner selection delivered SIGKILL")

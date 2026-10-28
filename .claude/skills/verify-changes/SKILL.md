@@ -118,6 +118,9 @@ The test retains the manager's authenticated original launch identity before
 workload actions, compares the current full identity before signaling, and binds
 the later recovery receipt to that retained birth. Its stale-owner regression
 uses a real disposable process and requires refusal without SIGKILL delivery.
+That standalone fixture waits for Core's launch gate to exec the target while
+retaining the original birth; missing/replaced ownership or cancellation fails
+readiness, and the bounded wait cannot turn a timeout into qualification.
 
 The test isolates OS HOME (Core's registry) from the supplied installation home.
 It needs npm, Node, network access for the fixture's pinned dependencies, and a
