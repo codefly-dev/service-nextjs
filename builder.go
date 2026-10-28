@@ -434,10 +434,10 @@ func (d DockerTemplating) InstallWorkdirs() []string {
 	return commands
 }
 
-// NodeImage matches the tested SaaS Starter frontend build substrate. Keeping
-// the digest here makes agent-generated builds reproducible instead of silently
-// changing whenever a floating node:24-alpine tag moves.
-const NodeImage = "node:24.17.0-alpine3.23@sha256:7c70d1235c0b4c2bc9eeed5393d19f1bbdde6885ba0d58ba62bb385d7b0f3ff1"
+// NodeImage pins the build and SSR runtime substrate to a multi-architecture
+// index. Refresh through the maintained substrate procedure; the Go constant
+// is not visible to Docker dependency automation.
+const NodeImage = "node:24.22.1-alpine3.24@sha256:06d7adf3e0ef61a13f1d28682726366f97a15aa1888c934d3ecec86c33918b53"
 
 func (s *Builder) BuildCapabilities(context.Context, *builderv0.BuildCapabilitiesRequest) (*builderv0.BuildCapabilitiesResponse, error) {
 	// Recipe execution, including Buildx selection, belongs to the CLI.
