@@ -62,6 +62,11 @@ grammars, so every target in `.goreleaser.yaml` sets `CGO_ENABLED=1` with a
 per-platform cross compiler (`o64-clang`, `aarch64-linux-gnu-gcc`, …). That is
 what `goreleaser-cross` supplies and what a plain runner does not.
 
+Keep GoReleaser's root `/dist/` output ignored: it writes metadata before
+compiling, and Go counts untracked files when stamping `vcs.modified` and
+`+dirty`. Preserve VCS stamping; verify the next published binaries carry the
+expected revision and `vcs.modified=false`.
+
 Disabling CGO to make a build succeed does not produce a smaller release — it
 produces an agent whose parser cannot work in production. If a release build
 fails on the toolchain, fix the toolchain or the image pin; do not remove the
