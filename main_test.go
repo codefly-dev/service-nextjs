@@ -109,6 +109,45 @@ func testIdentity(t *testing.T, tmpDir string) (*basev0.ServiceIdentity, *resour
 	return identity, env
 }
 
+// testNestedWorkspaceIdentity is the fleet's actual shape, which the fixture
+// above does NOT model: the workspace root sits INSIDE a checkout, at
+// <root>/playground, and the packages a service links by `file:` live ABOVE
+// it, beside the checkout's other modules. Both module-robin's and
+// service-pdf's playgrounds are this — their only workspace is `playground/`
+// and their linked siblings are at the checkout root. A fixture whose
+// workspace always encloses the linked package made an install bound to the
+// workspace look correct and shipped a release that refused both of them.
+func testNestedWorkspaceIdentity(t *testing.T, tmpDir string) (*basev0.ServiceIdentity, *resources.Environment) {
+	t.Helper()
+	ctx := context.Background()
+
+	workspaceDir := path.Join(tmpDir, "playground")
+	require.NoError(t, os.MkdirAll(workspaceDir, 0o755))
+	require.NoError(t, os.WriteFile(path.Join(workspaceDir, "workspace.codefly.yaml"),
+		[]byte("name: test-playground\nlayout: modules\nmodules:\n    - name: mod\n      path: mod\n"), 0o644))
+
+	service := &resources.Service{Name: "frontend", Version: "0.0.0"}
+	require.NoError(t, service.SaveAtDir(ctx, path.Join(workspaceDir, fmt.Sprintf("mod/%s", service.Name))))
+	service.WithModule("mod")
+
+	mod := &resources.Module{Name: "mod"}
+	require.NoError(t, mod.SaveToDir(ctx, path.Join(workspaceDir, "mod")))
+
+	identity := &basev0.ServiceIdentity{
+		Name:                service.Name,
+		Version:             service.Version,
+		Module:              "mod",
+		Workspace:           "test-playground",
+		WorkspacePath:       workspaceDir,
+		RelativeToWorkspace: fmt.Sprintf("mod/%s", service.Name),
+	}
+
+	env := resources.LocalEnvironment()
+	env.NamingScope = strconv.Itoa(time.Now().Second())
+
+	return identity, env
+}
+
 func TestParseNPMTestOutputCombinesVitestAndNodeCounts(t *testing.T) {
 	output := `
  Test Files  44 passed (44)
