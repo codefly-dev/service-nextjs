@@ -126,19 +126,19 @@ func TestBuilderTemplateInstallsWorkspaceGraphReproducibly(t *testing.T) {
 	source := string(dockerfile)
 	for _, required := range []string{
 		"FROM {{.NodeImage}} AS base",
-		"COPY {{.SourceCopy}}",
+		"COPY src/ /src/",
 		"COPY service.codefly.yaml /service.codefly.yaml",
 		"RUN npm ci",
-		"RUN mkdir -p public && npm run build",
+		"RUN node /codefly/next-build.cjs",
 	} {
 		if !strings.Contains(source, required) {
 			t.Fatalf("Dockerfile template missing %q", required)
 		}
 	}
-	copySource := strings.Index(source, "COPY {{.SourceCopy}}")
+	copySource := strings.Index(source, "COPY src/ /src/")
 	install := strings.Index(source, "RUN npm ci")
-	copyInstalled := strings.Index(source, "COPY --from=deps /app/ ./")
-	build := strings.Index(source, "RUN mkdir -p public && npm run build")
+	copyInstalled := strings.Index(source, "COPY --from=deps /src/ /src/")
+	build := strings.Index(source, "RUN node /codefly/next-build.cjs")
 	if !(copySource < install && install < copyInstalled && copyInstalled < build) {
 		t.Fatal("build must use the complete source and clean workspace installs from the dependency stage")
 	}
@@ -208,7 +208,7 @@ func TestBuilderTemplateRendersDeclaredBuildArgsBeforeBuild(t *testing.T) {
 			t.Fatalf("rendered Dockerfile missing %q:\n%s", required, out)
 		}
 	}
-	if strings.Index(out, "ARG FRONTEND_SKIN_RUNTIME") > strings.Index(out, "npm run build") {
+	if strings.Index(out, "ARG FRONTEND_SKIN_RUNTIME") > strings.Index(out, "RUN node /codefly/next-build.cjs") {
 		t.Fatal("build-args must be declared before the build step")
 	}
 
@@ -328,7 +328,7 @@ func TestRenderedDockerfilePinsEveryExternalImageByDigest(t *testing.T) {
 			if !strings.HasPrefix(runner, "nginx:") {
 				t.Fatalf("static runner is %q, want a pinned nginx image", runner)
 			}
-			for _, required := range []string{"COPY --from=builder /app/out /usr/share/nginx/html", `CMD ["nginx", "-g", "daemon off;"]`} {
+			for _, required := range []string{"COPY --from=builder /codefly/runtime/ /usr/share/nginx/html", `CMD ["nginx", "-g", "daemon off;"]`} {
 				if !strings.Contains(out, required) {
 					t.Fatalf("static runner missing %q", required)
 				}

@@ -406,19 +406,32 @@ func generatedFiles(root string) (map[string]generatedFile, error) {
 }
 
 type DockerTemplating struct {
-	NodeImage string
-	Static    bool
-	SourceDir string
+	NodeImage   string
+	Static      bool
+	SourceDir   string
+	InstallDirs []string
 	// BuildArgs are the declared build-arg names, sorted. The Dockerfile declares
 	// each as an ARG and promotes it to an ENV in the build stage so `next build`
 	// reads it; the value is supplied at build time via --build-arg.
 	BuildArgs []string
 }
 
-// JSON COPY syntax preserves spaces and quotes in the declared source path.
-func (d DockerTemplating) SourceCopy() string {
-	encoded, _ := json.Marshal([]string{d.SourceDir, "./"})
+// Dockerfile JSON strings preserve spaces and prevent instruction injection.
+func (d DockerTemplating) AppWorkdir() string {
+	encoded, _ := json.Marshal("/src/" + d.SourceDir)
 	return string(encoded)
+}
+func (d DockerTemplating) RuntimeWorkdir() string {
+	encoded, _ := json.Marshal("/app/" + d.SourceDir)
+	return string(encoded)
+}
+func (d DockerTemplating) InstallWorkdirs() []string {
+	commands := []string{}
+	for _, dir := range d.InstallDirs {
+		encoded, _ := json.Marshal("/src/" + dir)
+		commands = append(commands, string(encoded))
+	}
+	return commands
 }
 
 // NodeImage matches the tested SaaS Starter frontend build substrate. Keeping
@@ -465,23 +478,29 @@ func (s *Builder) Build(ctx context.Context, req *builderv0.BuildRequest) (*buil
 	return s.buildRecipe(ctx, docker, image, req.GetOutputDirectory())
 }
 
-// Clear the output directory before rendering so stale artifacts cannot enter
-// the recipe inventory and digest.
+// Assemble admitted inputs without removing caller-owned output files.
 func (s *Builder) buildRecipe(ctx context.Context, docker DockerTemplating, image *resources.DockerImage, output string) (*builderv0.BuildResponse, error) {
-	err := os.RemoveAll(output)
+	inputs, app, err := stageBuildInputs(ctx, s.Local("%s", docker.SourceDir), s.Location, output)
 	if err != nil {
 		return s.Builder.BuildError(err)
 	}
-
-	err = s.Templates(ctx, docker, services.WithBuilder(builderFS).WithDestination("%s", output))
-	if err != nil {
+	docker.SourceDir = app
+	for _, root := range inputs.installs {
+		rel, _ := filepath.Rel(inputs.common, root)
+		docker.InstallDirs = append(docker.InstallDirs, filepath.ToSlash(rel))
+	}
+	if _, err = services.PrepareRecipeDestination(builderFS, output); err != nil {
+		return s.Builder.BuildError(err)
+	}
+	if err = s.Templates(ctx, docker, services.WithBuilder(builderFS).WithDestination("%s", output)); err != nil {
 		return s.Builder.BuildError(err)
 	}
 
 	recipe := &builderv0.DockerBuildRecipe{
 		Name:         filepath.Base(image.Name),
 		Dockerfile:   "Dockerfile",
-		Context:      ".",
+		Context:      "context",
+		ContextRoot:  builderv0.RecipeContextRoot_RECIPE_CONTEXT_ROOT_OUTPUT,
 		Dockerignore: "dockerignore",
 		Image:        image.FullName(),
 		Platforms:    []string{"linux/amd64", "linux/arm64"},

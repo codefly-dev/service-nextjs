@@ -23,6 +23,23 @@ go test ./...
 `go mod tidy -diff` is the one people miss: a dependency added by hand passes
 build and test, then fails CI.
 
+## Next packaging
+
+Changes to declared input projection or standalone packaging also run:
+
+```bash
+go test -run 'TestDeclared|TestBuildRecipe|TestRecipeBuild' -count=1 .
+CODEFLY_TEST_NEXT_BUILD=1 go test -run '^TestNextConfiguredStandaloneOutput$' -count=1 -timeout=10m -v .
+```
+
+The latter installs exact Next/React fixture dependencies in temporary directories
+and runs real Next production builds for default and custom/nested output. It
+requires Node/npm and package-registry access. The optional
+`CODEFLY_NEXT_CONSUMER_SOURCE` fixture checks an explicitly selected consumer
+snapshot without writing into it. Neither establishes image execution: the
+maintained CLI must build the actual recipes, and image health/page/static asset
+checks must run without host source or node_modules before image qualification.
+
 ## The three gates the plain suite does not cover
 
 ### Native effective-input discovery

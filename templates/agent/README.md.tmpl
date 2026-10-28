@@ -68,13 +68,44 @@ The value must be a positive duration no greater than ten minutes.
 
 ## Build
 
-The service builds as a standalone Docker image for production deployment.
-The build context is the service directory. The recipe uses `spec.source-dir`
-(`code` by default, or `.` for an application at the service root) and installs
-the complete application tree with `npm ci`. Workspaces keep their declared
-directory names; a `packages/` directory is not required. Host `node_modules`
-and `.next` trees are excluded at every depth. The builder stage receives the
-same source and clean install, including nested workspace dependencies.
+The service builds a standalone Docker image for production deployment. The
+application comes from `spec.source-dir` (`code` by default, `.` for the service
+root, or a custom directory inside the service). It must declare Next
+`output: "standalone"`; static services instead declare `output: "export"`.
+Custom production `distDir` and `outputFileTracingRoot` are resolved using the
+installed Next configuration and verified against fresh build metadata. Nested
+standalone servers retain their relative layout, public files and static assets.
+There is no hosted `npm start` fallback. Development and production output may
+remain separate.
+
+The agent projects the application plus its declared relative `file:` packages
+and archives, including local inputs in npm locks. Package roots retain their
+relative topology; their common ancestor is never copied wholesale. A parent
+package may contain the application. Genuine dependency cycles, missing inputs,
+absolute/unsupported local references and symlinks are refused. Internal npm
+workspaces retain their names; a `packages/` directory is not required. Linked
+packages with dependencies need their own lock; copied leaves without an install
+graph need no invented lock. Each lock root receives ordinary `npm ci`, in
+local dependency order, before the application build. npm owns resolution and
+lifecycle scripts. Build scripts needing sibling inputs must declare those
+packages or archives; source imports do not authorize extra files.
+
+Each admitted package's `.dockerignore` applies to its subtree; service-root
+exclusions still apply inside the service and cannot be negated by a child
+policy. Host `node_modules`, `.next`, `.git`, `.cache`, TypeScript build-info and
+recognized Next output directories (containing `required-server-files.json`)
+are excluded. Such host metadata is used only to exclude artifacts, never to
+select production output. Inside the isolated build, Next selects the exact
+production directory; any remaining nonempty staged directory at that path is
+refused rather than deleted. Missing or inconsistent fresh output fails the build.
+
+The recipe uses Core's existing OUTPUT context and TREE inventory (v4). The CLI
+must support that contract and executes the build. Only the marked generated
+`context/` child and known recipe files are replaced; unrelated output files
+survive and are inventoried. Output cannot contain source roots; output nested
+under an admitted package is excluded from projection. TREE verification rejects
+added files as well as changed files. No source tree is deleted during staging.
+
+Source precedes dependency installs because npm lifecycle scripts may need it.
 Source edits therefore invalidate the dependency layer as well as the build
-layer. A source path outside the service context is refused; the recipe does
-not copy sibling projects from outside that context.
+layer: this intentionally trades manifest-only cache reuse for correct installs.

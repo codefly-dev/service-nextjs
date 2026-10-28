@@ -111,9 +111,11 @@ func nodeProjectLanguage(sourceFiles []*codev0.SourceFileInfo) string {
 }
 
 type nodePackageManifest struct {
-	Scripts         map[string]string `json:"scripts"`
-	Dependencies    map[string]string `json:"dependencies"`
-	DevDependencies map[string]string `json:"devDependencies"`
+	Scripts              map[string]string `json:"scripts"`
+	OptionalDependencies map[string]string `json:"optionalDependencies"`
+	PeerDependencies     map[string]string `json:"peerDependencies"`
+	Dependencies         map[string]string `json:"dependencies"`
+	DevDependencies      map[string]string `json:"devDependencies"`
 }
 
 type nodeProjectKind string

@@ -22,6 +22,7 @@ func loadedBuilder(t *testing.T) *Builder {
 		CreationMode: &builderv0.CreationMode{Communicate: false},
 	})
 	require.NoError(t, err)
+	writeRecipePackage(t, builder.Local("%s", builder.Settings.NodeSourceDir()))
 	return builder
 }
 
