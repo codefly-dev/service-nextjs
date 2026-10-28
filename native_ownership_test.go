@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"os/exec"
@@ -84,11 +85,7 @@ func TestNativeAgentOwnershipLifecycle(t *testing.T) {
 	// Restart through the same Runtime, then kill only its disposable owner
 	// birth so no agent Stop/finalizer can mask recovery of an orphan workload.
 	a.group = startNativeWorkload(t, ctx, a.client, a.workspace, a.address)
-	owner, err := runners.InspectProcess(a.conn.ProcessInfo().PID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := runners.SignalProcess(ctx, owner, syscall.SIGKILL); err != nil {
+	if err := killNativeOwner(ctx, a.owner); err != nil {
 		t.Fatal(err)
 	}
 	waitNativeCondition(t, func() bool {
@@ -106,11 +103,13 @@ func TestNativeAgentOwnershipLifecycle(t *testing.T) {
 		t.Fatalf("preview: %v", err)
 	}
 	expected, err := runners.ParseProcessGroupRecoveryExpectation(preview)
-	if err != nil || expected.Namespace != "authenticated-v2" || expected.PGID != a.group.PGID() || expected.Owner.PID != owner.PID {
+	if err != nil || expected.Namespace != "authenticated-v2" || expected.PGID != a.group.PGID() || expected.Owner.PID != a.owner.PID {
 		t.Fatalf("actual agent did not write the expected v2 registration: %+v, %v", expected, err)
 	}
-	require.Equal(t, owner.BootID, expected.Owner.BootID)
-	require.Equal(t, owner.StartID, expected.Owner.StartID)
+	// Recovery represents the recorded owner with PGID=0; compare its birth,
+	// not the full struct, to the launch identity retained before any workload.
+	require.Equal(t, a.owner.BootID, expected.Owner.BootID)
+	require.Equal(t, a.owner.StartID, expected.Owner.StartID)
 	t.Logf("orphan preview: %s", preview)
 	assertNativeOwnership(t, ctx, a.group, a.workspace, false)
 	receipt := filepath.Join(t.TempDir(), "recovery.json")
@@ -131,6 +130,9 @@ func TestNativeAgentOwnershipLifecycle(t *testing.T) {
 	siblingAfter, err := b.group.InspectOwnership(ctx)
 	require.NoError(t, err)
 	require.Equal(t, siblingBefore.Members, siblingAfter.Members, "sibling process births changed during recovery")
+	siblingOwner, err := runners.InspectProcess(b.owner.PID)
+	require.NoError(t, err)
+	require.Equal(t, b.owner, siblingOwner, "sibling's original agent birth changed")
 	t.Logf("recovery result: %s; sibling preserved", result)
 	stopped, err = b.client.Stop(ctx, &runtimev0.StopRequest{})
 	if err != nil || stopped.GetStatus().GetState() != runtimev0.StopStatus_SUCCESS {
@@ -145,6 +147,7 @@ type ownedNativeService struct {
 	workspace string
 	address   string
 	conn      *manager.AgentConn
+	owner     runners.ProcessIdentity
 	client    runtimev0.RuntimeClient
 	group     *runners.TrackedProcessGroup
 }
@@ -181,6 +184,19 @@ func startOwnedNativeService(t *testing.T, ctx context.Context) *ownedNativeServ
 	conn, err := manager.Load(ctx, agent, manager.WithoutSandbox(), manager.WithoutPrincipal(), manager.WithWorkDir(workspace))
 	require.NoError(t, err)
 	t.Cleanup(conn.Close)
+	// Retain the manager's authenticated launch record before Load/Init/Start.
+	// A later PID lookup alone cannot establish which birth we launched.
+	ownerGroup, err := runners.LookupProcessGroup(conn.ProcessInfo().PID)
+	require.NoError(t, err)
+	owner := ownerGroup.Leader()
+	require.Equal(t, conn.ProcessInfo().PID, owner.PID)
+	ownerObservation, err := ownerGroup.InspectOwnership(ctx)
+	require.NoError(t, err)
+	require.True(t, ownerObservation.Authenticated)
+	require.True(t, ownerObservation.OwnerAlive)
+	require.Equal(t, workspace, ownerObservation.LaunchWorkspace)
+	require.Contains(t, ownerObservation.Members, owner)
+	t.Logf("authenticated original agent launch %+v", owner)
 	client := runtimev0.NewRuntimeClient(conn.GRPCConn())
 	t.Cleanup(func() {
 		cleanup, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -208,8 +224,47 @@ func startOwnedNativeService(t *testing.T, ctx context.Context) *ownedNativeServ
 	if err != nil || initialized.GetStatus().GetState() != runtimev0.InitStatus_READY {
 		t.Fatalf("init: %v, %v\n%s", initialized, err, conn.StderrTail())
 	}
-	return &ownedNativeService{workspace: workspace, address: instance.Address, conn: conn, client: client,
+	return &ownedNativeService{workspace: workspace, address: instance.Address, conn: conn, owner: owner, client: client,
 		group: startNativeWorkload(t, ctx, client, workspace, instance.Address)}
+}
+
+// This fixture never execs or changes process groups. Require its complete
+// retained launch identity before asking Core to bind delivery to that birth.
+func killNativeOwner(ctx context.Context, original runners.ProcessIdentity) error {
+	current, err := runners.InspectProcess(original.PID)
+	if err != nil {
+		return err
+	}
+	if current != original {
+		return fmt.Errorf("original native owner changed: %w", runners.ErrProcessNotFound)
+	}
+	return runners.SignalProcess(ctx, current, syscall.SIGKILL)
+}
+
+func TestNativeOwnerSignalRejectsStaleBirth(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cmd := exec.Command("sleep", "30")
+	group, err := runners.StartTrackedProcessGroup(cmd)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		cleanup, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = group.Terminate(cleanup)
+		_ = cmd.Wait()
+		_ = group.RemoveIfDeadContext(cleanup)
+	})
+	original := group.Leader()
+	observation, err := group.InspectOwnership(t.Context())
+	require.NoError(t, err)
+	require.True(t, observation.Authenticated)
+	require.True(t, observation.OwnerAlive)
+	require.Contains(t, observation.Members, original)
+	stale := original
+	stale.StartID++
+	require.ErrorIs(t, killNativeOwner(t.Context(), stale), runners.ErrProcessNotFound)
+	current, err := runners.InspectProcess(original.PID)
+	require.NoError(t, err, "stale owner selection delivered SIGKILL")
+	require.Equal(t, original, current, "original process must survive stale-owner refusal unchanged")
 }
 
 func startNativeWorkload(t *testing.T, ctx context.Context, client runtimev0.RuntimeClient, workspace, address string) *runners.TrackedProcessGroup {

@@ -114,6 +114,10 @@ ownership. It kills only the exact disposable agent owner, recovers its orphan
 through CLI preview/expect, and verifies an independently launched sibling's
 process births remain unchanged. Core owns authentication, process inspection,
 signalling and registry removal; this agent adds no recovery mechanism.
+The test retains the manager's authenticated original launch identity before
+workload actions, compares the current full identity before signaling, and binds
+the later recovery receipt to that retained birth. Its stale-owner regression
+uses a real disposable process and requires refusal without SIGKILL delivery.
 
 The test isolates OS HOME (Core's registry) from the supplied installation home.
 It needs npm, Node, network access for the fixture's pinned dependencies, and a
