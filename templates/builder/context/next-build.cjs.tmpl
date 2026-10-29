@@ -39,7 +39,7 @@ async function build() {
   if (result.status !== 0) throw Error(`npm build failed: ${result.status}`);
   if (fs.existsSync(runtime)) throw Error('runtime destination already exists');
   if (mode === 'export') {
-    fs.cpSync(exported, runtime, { recursive: true, dereference: true });
+    await fs.promises.cp(exported, runtime, { recursive: true, dereference: true });
     return;
   }
   const metadata = JSON.parse(fs.readFileSync(path.join(dist, 'required-server-files.json'), 'utf8'));
@@ -50,11 +50,11 @@ async function build() {
   const standalone = path.join(dist, 'standalone');
   if (!fs.statSync(path.join(standalone, relativeApp, 'server.js')).isFile()) throw Error('standalone server missing');
   const target = path.join(runtime, path.relative(source, tracing));
-  fs.cpSync(standalone, target, { recursive: true, dereference: true });
+  await fs.promises.cp(standalone, target, { recursive: true, dereference: true });
   const serverRoot = path.join(runtime, path.relative(source, app));
   for (const name of ['public', path.join(config.distDir, 'static')]) {
     const from = path.join(app, name);
-    if (fs.existsSync(from)) fs.cpSync(from, path.join(serverRoot, name), { recursive: true, dereference: true });
+    if (fs.existsSync(from)) await fs.promises.cp(from, path.join(serverRoot, name), { recursive: true, dereference: true });
   }
 }
 build().catch(error => { console.error(error); process.exitCode = 1; });
