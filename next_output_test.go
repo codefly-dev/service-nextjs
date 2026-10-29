@@ -1,16 +1,106 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"io"
 	"io/fs"
+	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
+
+// Turbopack emits hashed package aliases for Sentry's server dependencies.
+// Execute the route over HTTP: importing its lazy page module is not sufficient.
+func TestNextTurbopackStandaloneRelocation(t *testing.T) {
+	if os.Getenv("CODEFLY_TEST_NEXT_BUILD") != "1" {
+		t.Skip("set CODEFLY_TEST_NEXT_BUILD=1 for real Turbopack/Sentry production HTTP")
+	}
+	root := physicalPath(t.TempDir())
+	app := filepath.Join(root, "source")
+	runtime := filepath.Join(root, "runtime")
+	buildInputWrite(t, app, "package.json", `{"name":"relocation-fixture","private":true,"scripts":{"build":"next build"},"dependencies":{"next":"16.4.1","react":"19.2.4","react-dom":"19.2.4","@sentry/nextjs":"10.75.2"}}`)
+	buildInputWrite(t, app, "next.config.mjs", `import {withSentryConfig} from '@sentry/nextjs'; export default withSentryConfig({output:'standalone',experimental:{cpus:1}}, {silent:true,telemetry:false,routeManifestInjection:false});`)
+	buildInputWrite(t, app, "app/layout.js", `export default function Layout({children}) { return <html><body>{children}</body></html>; }`)
+	buildInputWrite(t, app, "app/auth/callback/page.js", `import * as Sentry from '@sentry/nextjs'; export const dynamic='force-dynamic'; export default function Page() { Sentry.getClient(); return <p>relocated-sentry-page</p>; }`)
+	buildInputWrite(t, app, "instrumentation.js", `import * as Sentry from '@sentry/nextjs'; export async function register() {} export const onRequestError=Sentry.captureRequestError;`)
+	helper, err := fs.ReadFile(builderFS, "templates/builder/context/next-build.cjs.tmpl")
+	require.NoError(t, err)
+	buildInputWrite(t, root, "next-build.cjs", string(helper))
+	run := func(args ...string) string {
+		cmd := exec.CommandContext(t.Context(), args[0], args[1:]...)
+		cmd.Dir = app
+		cmd.Env = append(os.Environ(), "NODE_ENV=production", "NEXT_TELEMETRY_DISABLED=1", "npm_config_cache="+filepath.Join(root, "npm-cache"))
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "%s", out)
+		return string(out)
+	}
+	t.Logf("build/runtime Node: %s", strings.TrimSpace(run("node", "--version")))
+	run("npm", "install", "--include=dev", "--no-audit", "--no-fund")
+	t.Log(run("node", filepath.Join(root, "next-build.cjs"), app, runtime, "standalone"))
+	aliases, err := filepath.Glob(filepath.Join(app, ".next/standalone/.next/node_modules/require-in-the-middle-*"))
+	require.NoError(t, err)
+	require.NotEmpty(t, aliases, "real Turbopack build must exercise the traced package alias")
+	for _, alias := range aliases {
+		link, err := os.Readlink(alias)
+		require.NoError(t, err)
+		require.False(t, filepath.IsAbs(link), "framework alias should be relocatable: %s", link)
+		before, err := os.ReadFile(filepath.Join(alias, "index.js"))
+		require.NoError(t, err)
+		after, err := os.ReadFile(filepath.Join(runtime, ".next/node_modules", filepath.Base(alias), "index.js"))
+		require.NoError(t, err)
+		require.Equal(t, before, after, "relocation must preserve the package bytes")
+		t.Logf("generated alias %s -> %s", filepath.Base(alias), link)
+	}
+	// Remove the original path from resolution, without deleting its evidence.
+	require.NoError(t, os.Rename(app, filepath.Join(root, "source-withheld")))
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	address := listener.Addr().String()
+	_, port, err := net.SplitHostPort(address)
+	require.NoError(t, err)
+	require.NoError(t, listener.Close())
+	ctx, cancel := context.WithCancel(t.Context())
+	server := exec.CommandContext(ctx, "node", "server.js")
+	server.Dir = runtime
+	server.Env = append(os.Environ(), "NODE_ENV=production", "NEXT_TELEMETRY_DISABLED=1", "NODE_PATH=", "HOSTNAME=127.0.0.1", "PORT="+port)
+	logPath := filepath.Join(root, "production-server.log")
+	logFile, err := os.Create(logPath)
+	require.NoError(t, err)
+	server.Stdout, server.Stderr = logFile, logFile
+	require.NoError(t, server.Start())
+	t.Cleanup(func() {
+		cancel()
+		_ = server.Wait()
+		_ = logFile.Close()
+		log, _ := os.ReadFile(logPath)
+		t.Logf("production server: %s", log)
+	})
+	client := &http.Client{Timeout: 10 * time.Second}
+	var response *http.Response
+	require.Eventually(t, func() bool {
+		response, err = client.Get("http://" + address + "/auth/callback")
+		return err == nil
+	}, time.Minute, 100*time.Millisecond, "standalone server must answer without its source tree")
+	defer response.Body.Close()
+	body, err := io.ReadAll(response.Body)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, response.StatusCode, "%s", body)
+	require.Contains(t, string(body), "relocated-sentry-page")
+	for _, alias := range aliases {
+		info, err := os.Lstat(filepath.Join(runtime, ".next/node_modules", filepath.Base(alias)))
+		require.NoError(t, err)
+		require.True(t, info.IsDir(), "traced package must be materialized, not linked to the build stage")
+	}
+	t.Log("production GET /auth/callback: 200 with source withheld")
+}
 
 // This opt-in test installs the real framework and runs its actual production
 // compiler. Recipe unit tests alone cannot establish the standalone layout.
