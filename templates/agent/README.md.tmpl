@@ -81,6 +81,8 @@ root, or a custom directory inside the service). It must declare Next
 Custom production `distDir` and `outputFileTracingRoot` are resolved using the
 installed Next configuration and verified against fresh build metadata. Nested
 standalone servers retain their relative layout, public files and static assets.
+Relocation materializes traced package aliases so the runtime does not depend on
+symlinks back into the build stage's source tree.
 There is no hosted `npm start` fallback. Development and production output may
 remain separate.
 

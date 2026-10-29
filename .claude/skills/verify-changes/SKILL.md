@@ -29,13 +29,15 @@ Changes to declared input projection or standalone packaging also run:
 
 ```bash
 go test -run 'TestDeclared|TestBuildRecipe|TestRecipeBuild' -count=1 .
-CODEFLY_TEST_NEXT_BUILD=1 go test -run '^TestNext(ConfiguredStandaloneOutput|ExportRejectsStaleOutput)$' -count=1 -timeout=10m -v .
+CODEFLY_TEST_NEXT_BUILD=1 go test -run '^TestNext(ConfiguredStandaloneOutput|ExportRejectsStaleOutput|TurbopackStandaloneRelocation)$' -count=1 -timeout=10m -v .
 ```
 
 The latter installs exact Next/React fixture dependencies in temporary directories
 and runs real Next production builds for default and custom/nested output, plus
-default/custom export freshness refusal tests using the real config loader. It
-requires Node/npm and package-registry access. The optional
+default/custom export freshness refusal tests using the real config loader. The
+Turbopack/Sentry fixture requests a production page after withholding its source
+tree, exercising lazy route evaluation and traced package relocation. These
+checks require Node/npm and package-registry access. The optional
 `CODEFLY_NEXT_CONSUMER_SOURCE` fixture checks an explicitly selected consumer
 snapshot without writing into it. Neither establishes image execution: the
 maintained CLI must build the actual recipes, and image health/page/static asset
