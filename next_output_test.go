@@ -26,7 +26,7 @@ func TestNextTurbopackStandaloneRelocation(t *testing.T) {
 	root := physicalPath(t.TempDir())
 	app := filepath.Join(root, "source")
 	runtime := filepath.Join(root, "runtime")
-	buildInputWrite(t, app, "package.json", `{"name":"relocation-fixture","private":true,"scripts":{"build":"next build"},"dependencies":{"next":"16.4.1","react":"19.2.4","react-dom":"19.2.4","@sentry/nextjs":"10.75.2"}}`)
+	buildInputWrite(t, app, "package.json", `{"name":"relocation-fixture","private":true,"scripts":{"build":"next build"},"dependencies":{"next":"16.4.6","react":"19.2.4","react-dom":"19.2.4","@sentry/nextjs":"10.75.2"}}`)
 	buildInputWrite(t, app, "next.config.mjs", `import {withSentryConfig} from '@sentry/nextjs'; export default withSentryConfig({output:'standalone',experimental:{cpus:1}}, {silent:true,telemetry:false,routeManifestInjection:false});`)
 	buildInputWrite(t, app, "app/layout.js", `export default function Layout({children}) { return <html><body>{children}</body></html>; }`)
 	buildInputWrite(t, app, "app/auth/callback/page.js", `import * as Sentry from '@sentry/nextjs'; export const dynamic='force-dynamic'; export default function Page() { Sentry.getClient(); return <p>relocated-sentry-page</p>; }`)
@@ -120,7 +120,7 @@ func TestNextConfiguredStandaloneOutput(t *testing.T) {
 				dist = ".next-build"
 				relative = "services/web"
 			}
-			manifest := map[string]any{"name": "output-fixture", "private": true, "scripts": map[string]string{"build": "next build --webpack"}, "dependencies": map[string]string{"next": "16.4.1", "react": "19.2.4", "react-dom": "19.2.4"}}
+			manifest := map[string]any{"name": "output-fixture", "private": true, "scripts": map[string]string{"build": "next build --webpack"}, "dependencies": map[string]string{"next": "16.4.6", "react": "19.2.4", "react-dom": "19.2.4"}}
 			writeManifest := func() {
 				data, err := json.Marshal(manifest)
 				require.NoError(t, err)
@@ -216,7 +216,7 @@ func TestNextExportRejectsStaleOutput(t *testing.T) {
 	}
 	root := physicalPath(t.TempDir())
 	app := filepath.Join(root, "source")
-	buildInputWrite(t, app, "package.json", `{"name":"export-freshness-fixture","private":true,"scripts":{"build":"node -e \"require('fs').writeFileSync('build-invoked','yes')\""},"dependencies":{"next":"16.4.1","react":"19.2.4","react-dom":"19.2.4"}}`)
+	buildInputWrite(t, app, "package.json", `{"name":"export-freshness-fixture","private":true,"scripts":{"build":"node -e \"require('fs').writeFileSync('build-invoked','yes')\""},"dependencies":{"next":"16.4.6","react":"19.2.4","react-dom":"19.2.4"}}`)
 	helper, err := fs.ReadFile(builderFS, "templates/builder/context/next-build.cjs.tmpl")
 	require.NoError(t, err)
 	buildInputWrite(t, root, "next-build.cjs", string(helper))
