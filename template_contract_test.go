@@ -47,7 +47,7 @@ func TestFactoryTemplateUsesExplicitApplicationOwnedComposition(t *testing.T) {
 		t.Fatalf("React Compiler version = %q", manifest.DevDependencies["babel-plugin-react-compiler"])
 	}
 	for name, version := range map[string]string{
-		"next":      "16.4.1",
+		"next":      "16.4.6",
 		"react":     "19.3.1",
 		"react-dom": "19.3.1",
 	} {
