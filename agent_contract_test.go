@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -46,7 +47,7 @@ func TestBuiltAgentIsAdmittedOverAuthenticatedDiscovery(t *testing.T) {
 	)
 	stdout, err := command.StdoutPipe()
 	require.NoError(t, err)
-	var stderr bytes.Buffer
+	var stderr agentOutput
 	command.Stderr = &stderr
 	require.NoError(t, command.Start())
 	t.Cleanup(func() { _ = command.Process.Kill(); _ = command.Wait() })
@@ -72,7 +73,7 @@ func TestBuiltAgentIsAdmittedOverAuthenticatedDiscovery(t *testing.T) {
 
 // readHandshake returns the startup protocol version the agent process spoke
 // and the endpoint it published, from the "VERSION|<endpoint>" first line.
-func readHandshake(t *testing.T, stdout io.Reader, stderr *bytes.Buffer) (uint32, string) {
+func readHandshake(t *testing.T, stdout io.Reader, stderr *agentOutput) (uint32, string) {
 	t.Helper()
 	lines := make(chan string, 1)
 	go func() {
@@ -93,4 +94,24 @@ func readHandshake(t *testing.T, stdout io.Reader, stderr *bytes.Buffer) (uint32
 		t.Fatalf("agent did not emit a handshake\nagent stderr:\n%s", stderr.String())
 		return 0, ""
 	}
+}
+
+// agentOutput collects what the agent process writes to stderr. os/exec copies
+// into it from its own goroutine for as long as the process runs, and the test
+// reads it while the agent is still up, so both go through one lock.
+type agentOutput struct {
+	mu     sync.Mutex
+	buffer bytes.Buffer
+}
+
+func (o *agentOutput) Write(p []byte) (int, error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.buffer.Write(p)
+}
+
+func (o *agentOutput) String() string {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.buffer.String()
 }
