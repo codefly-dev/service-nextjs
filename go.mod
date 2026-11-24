@@ -4,7 +4,7 @@ go 1.27.4
 
 require (
 	github.com/Masterminds/semver v1.5.0
-	github.com/codefly-dev/core v0.19.35
+	github.com/codefly-dev/core v0.19.36
 	github.com/moby/patternmatcher v0.6.1
 	github.com/stretchr/testify v1.12.1
 	google.golang.org/grpc v1.85.0
