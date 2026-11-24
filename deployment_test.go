@@ -18,7 +18,8 @@ import (
 
 func TestDeploymentTemplates(t *testing.T) {
 	agenttesting.AssertKustomizeTemplates(t, deploymentFS, &deploymentTemplateParameters{
-		ServicePorts: []servicePort{{Port: containerPort}},
+		ServicePorts:  []servicePort{{Port: containerPort}},
+		ContainerPort: containerPort,
 	})
 }
 

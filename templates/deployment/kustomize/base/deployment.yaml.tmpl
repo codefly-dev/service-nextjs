@@ -41,7 +41,7 @@ spec:
               type: RuntimeDefault
           ports:
             - name: http
-              containerPort: 3000
+              containerPort: {{ .Deployment.Parameters.ContainerPort }}
           envFrom:
             - configMapRef:
                 name: {{.Name}}-config

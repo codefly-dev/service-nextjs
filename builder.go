@@ -425,6 +425,16 @@ func (d DockerTemplating) RuntimeWorkdir() string {
 	encoded, _ := json.Marshal("/app/" + d.SourceDir)
 	return string(encoded)
 }
+
+// ContainerPort is the port the rendered image listens on and exposes: the
+// agent's SSR container port, or the static server's. The recipe reads it from
+// here so the Dockerfile and the kustomize bundle cannot name different ports.
+func (d DockerTemplating) ContainerPort() uint32 {
+	if d.Static {
+		return staticContainerPort
+	}
+	return containerPort
+}
 func (d DockerTemplating) InstallWorkdirs() []string {
 	commands := []string{}
 	for _, dir := range d.InstallDirs {
@@ -595,7 +605,7 @@ func (s *Builder) Deploy(ctx context.Context, req *builderv0.DeploymentRequest) 
 	defer s.Wool.Catch()
 	ctx = s.Wool.Inject(ctx)
 
-	parameters := &deploymentTemplateParameters{}
+	parameters := &deploymentTemplateParameters{ContainerPort: containerPort}
 	return s.Builder.DeployKustomize(ctx, req, services.KustomizeDeployment{
 		EnvironmentVariables: s.EnvironmentVariables,
 		Templates:            deploymentFS,
@@ -617,15 +627,21 @@ func (s *Builder) Deploy(ctx context.Context, req *builderv0.DeploymentRequest) 
 	})
 }
 
-// containerPort is the port the Next.js server listens on inside the pod
-// (deployment.yaml.tmpl's containerPort). Every published Service port
-// forwards to it.
+// containerPort is the port the Next.js server listens on inside the pod.
+// It is the one place the number is written: the Dockerfile recipe (EXPOSE and
+// PORT), deployment.yaml.tmpl's containerPort and service.yaml.tmpl's
+// targetPort all render it. Every published Service port forwards to it.
 const containerPort uint32 = 3000
+
+// staticContainerPort is the port the static export's nginx image listens on.
+const staticContainerPort uint32 = 80
 
 // deploymentTemplateParameters reach the kustomize templates as
 // .Deployment.Parameters.
 type deploymentTemplateParameters struct {
 	ServicePorts []servicePort
+	// ContainerPort is the pod port every published Service port forwards to.
+	ContainerPort uint32
 }
 
 // servicePort is one port the rendered Service publishes. Name is empty when

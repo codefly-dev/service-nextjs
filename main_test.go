@@ -390,6 +390,14 @@ func TestBuilderCreate(t *testing.T) {
 	// Verify key files were scaffolded
 	serviceDir := path.Join(tmpDir, "mod/frontend")
 
+	// The guide names the command that resolves this service's address; the
+	// port is derived, so a literal address in it would be wrong for every
+	// generated service.
+	guide, err := os.ReadFile(path.Join(serviceDir, "GETTING_STARTED.md"))
+	require.NoError(t, err)
+	require.Contains(t, string(guide), "codefly endpoint mod/frontend --type http")
+	require.NotContains(t, string(guide), "localhost")
+
 	// Core Next.js files
 	assertFileExists(t, serviceDir, "code/package.json")
 	assertFileExists(t, serviceDir, "code/.gitignore")

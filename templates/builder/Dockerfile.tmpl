@@ -51,7 +51,7 @@ FROM nginx:1.31.7-alpine@sha256:892bb2152464f0c5d8972593a5f5afaf8054552580b699d9
 COPY --from=builder /codefly/runtime/ /usr/share/nginx/html
 COPY --from=deps /codefly/apk-packages.txt /codefly/apk-packages.txt
 
-EXPOSE 80
+EXPOSE {{.ContainerPort}}
 
 CMD ["nginx", "-g", "daemon off;"]
 {{else}}
@@ -76,9 +76,9 @@ COPY --from=deps /codefly/apk-packages.txt /codefly/apk-packages.txt
 
 USER nextjs
 
-EXPOSE 3000
+EXPOSE {{.ContainerPort}}
 
-ENV PORT=3000
+ENV PORT={{.ContainerPort}}
 ENV HOSTNAME="0.0.0.0"
 
 CMD ["node", "server.js"]

@@ -14,5 +14,5 @@ spec:
 {{- else }}
     - port: {{ .Port }}
 {{- end }}
-      targetPort: 3000
+      targetPort: {{ $.Deployment.Parameters.ContainerPort }}
 {{- end }}

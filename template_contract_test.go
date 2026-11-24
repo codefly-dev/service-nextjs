@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"regexp"
 	"strings"
@@ -388,6 +389,45 @@ func TestBuilderTemplateRecordsTheResolvedOSPackageSetInBothRunners(t *testing.T
 		// Evidence that stays in a discarded build stage is not evidence.
 		if !strings.Contains(rendered.String(), "COPY --from=deps /codefly/apk-packages.txt /codefly/apk-packages.txt") {
 			t.Fatalf("static=%v: runtime image does not carry the recorded package set", static)
+		}
+	}
+}
+
+// The recipe's ports come from the agent's port constants, the same ones the
+// kustomize bundle renders: a number typed into the template could drift from
+// the Service's targetPort without any test noticing.
+func TestRenderedDockerfilePortsComeFromTheAgentPortConstants(t *testing.T) {
+	t.Parallel()
+
+	dockerfile, err := fs.ReadFile(builderFS, "templates/builder/Dockerfile.tmpl")
+	if err != nil {
+		t.Fatalf("read Dockerfile template: %v", err)
+	}
+	if literal := regexp.MustCompile(`(?m)^(EXPOSE|ENV PORT=)\s*\d+`).FindString(string(dockerfile)); literal != "" {
+		t.Fatalf("Dockerfile template hardcodes a port: %q", literal)
+	}
+	parsed, err := template.New("Dockerfile").Parse(string(dockerfile))
+	if err != nil {
+		t.Fatalf("parse Dockerfile template: %v", err)
+	}
+	for _, tc := range []struct {
+		static bool
+		want   []string
+	}{
+		{static: false, want: []string{fmt.Sprintf("\nEXPOSE %d\n", containerPort), fmt.Sprintf("\nENV PORT=%d\n", containerPort)}},
+		{static: true, want: []string{fmt.Sprintf("\nEXPOSE %d\n", staticContainerPort)}},
+	} {
+		rendered := &bytes.Buffer{}
+		if err := parsed.Execute(rendered, DockerTemplating{SourceDir: "code", NodeImage: NodeImage, Static: tc.static}); err != nil {
+			t.Fatalf("static=%v: render Dockerfile: %v", tc.static, err)
+		}
+		for _, want := range tc.want {
+			if !strings.Contains(rendered.String(), want) {
+				t.Fatalf("static=%v: rendered Dockerfile missing %q:\n%s", tc.static, want, rendered.String())
+			}
+		}
+		if got := strings.Count(rendered.String(), "\nEXPOSE "); got != 1 {
+			t.Fatalf("static=%v: rendered Dockerfile has %d EXPOSE lines, want 1", tc.static, got)
 		}
 	}
 }
