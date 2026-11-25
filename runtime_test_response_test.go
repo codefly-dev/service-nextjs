@@ -6,13 +6,13 @@ import (
 	"testing"
 	"time"
 
-	runtimev0 "github.com/codefly-dev/core/generated/go/codefly/services/runtime/v0"
+	runtimev1 "github.com/codefly-dev/core/generated/go/codefly/services/runtime/v1"
 	"github.com/stretchr/testify/require"
 )
 
 func TestCompletedTestRPCResultPreservesStructuredFailures(t *testing.T) {
 	executionErr := errors.New("test process exited 1")
-	response := &runtimev0.TestResponse{}
+	response := &runtimev1.TestResponse{}
 
 	got, err := completedTestRPCResult(response, executionErr)
 
@@ -77,7 +77,7 @@ func TestConsoleFallbackPreservesTypedPlaywrightFailureContract(t *testing.T) {
 	)
 
 	require.NoError(t, err)
-	require.Equal(t, runtimev0.TestRunResult_FAILED, response.GetResult().GetState())
+	require.Equal(t, runtimev1.TestRunResult_FAILED, response.GetResult().GetState())
 	require.EqualValues(t, 62, response.GetCounts().GetTotal())
 	require.EqualValues(t, 1, response.GetCounts().GetFailed())
 	require.EqualValues(t, 61, response.GetCounts().GetSkipped())

@@ -9,8 +9,8 @@ import (
 
 	"github.com/codefly-dev/core/agents/services"
 	agenttesting "github.com/codefly-dev/core/agents/testing"
-	basev0 "github.com/codefly-dev/core/generated/go/codefly/base/v0"
-	builderv0 "github.com/codefly-dev/core/generated/go/codefly/services/builder/v0"
+	basev1 "github.com/codefly-dev/core/generated/go/codefly/base/v1"
+	builderv1 "github.com/codefly-dev/core/generated/go/codefly/services/builder/v1"
 	"github.com/codefly-dev/core/resources"
 	"github.com/codefly-dev/core/standards"
 	"github.com/stretchr/testify/require"
@@ -34,9 +34,9 @@ func TestDeployProfiles(t *testing.T) {
 	ctx := context.Background()
 	identity, environment := testIdentity(t, t.TempDir())
 	builder := NewBuilder(NewService())
-	_, err := builder.Load(ctx, &builderv0.LoadRequest{
+	_, err := builder.Load(ctx, &builderv1.LoadRequest{
 		Identity:     identity,
-		CreationMode: &builderv0.CreationMode{Communicate: false},
+		CreationMode: &builderv1.CreationMode{Communicate: false},
 	})
 	require.NoError(t, err)
 	environmentProto, err := environment.Proto()
@@ -44,22 +44,22 @@ func TestDeployProfiles(t *testing.T) {
 
 	tests := []struct {
 		name                    string
-		profile                 builderv0.KubernetesOutputProfile
+		profile                 builderv1.KubernetesOutputProfile
 		validateServerSide      bool
-		serverSideValidation    builderv0.KubernetesManifestValidation_Status
+		serverSideValidation    builderv1.KubernetesManifestValidation_Status
 		restricted              bool
-		secretReferences        map[string]*builderv0.KubernetesSecretKeyReference
-		dependencyConfiguration []*basev0.Configuration
+		secretReferences        map[string]*builderv1.KubernetesSecretKeyReference
+		dependencyConfiguration []*basev1.Configuration
 	}{
 		{
 			name:                 "ephemeral local apply",
-			profile:              builderv0.KubernetesOutputProfile_KUBERNETES_OUTPUT_PROFILE_EPHEMERAL_LOCAL_APPLY_V1,
-			serverSideValidation: builderv0.KubernetesManifestValidation_STATUS_NOT_RUN,
-			dependencyConfiguration: []*basev0.Configuration{{
+			profile:              builderv1.KubernetesOutputProfile_KUBERNETES_OUTPUT_PROFILE_EPHEMERAL_LOCAL_APPLY_V1,
+			serverSideValidation: builderv1.KubernetesManifestValidation_STATUS_NOT_RUN,
+			dependencyConfiguration: []*basev1.Configuration{{
 				Origin: "module/dependency",
-				Infos: []*basev0.ConfigurationInformation{{
+				Infos: []*basev1.ConfigurationInformation{{
 					Name: "auth",
-					ConfigurationValues: []*basev0.ConfigurationValue{{
+					ConfigurationValues: []*basev1.ConfigurationValue{{
 						Key:    "CODEFLY_TEST_SECRET",
 						Value:  "secret",
 						Secret: true,
@@ -69,11 +69,11 @@ func TestDeployProfiles(t *testing.T) {
 		},
 		{
 			name:                 "restricted portable",
-			profile:              builderv0.KubernetesOutputProfile_KUBERNETES_OUTPUT_PROFILE_RESTRICTED_PORTABLE_V1,
+			profile:              builderv1.KubernetesOutputProfile_KUBERNETES_OUTPUT_PROFILE_RESTRICTED_PORTABLE_V1,
 			validateServerSide:   true,
-			serverSideValidation: builderv0.KubernetesManifestValidation_STATUS_PASSED,
+			serverSideValidation: builderv1.KubernetesManifestValidation_STATUS_PASSED,
 			restricted:           true,
-			secretReferences: map[string]*builderv0.KubernetesSecretKeyReference{
+			secretReferences: map[string]*builderv1.KubernetesSecretKeyReference{
 				"CODEFLY_TEST_SECRET": {
 					Name:     "external-secret",
 					Key:      "password",
@@ -83,24 +83,24 @@ func TestDeployProfiles(t *testing.T) {
 		},
 		{
 			name:                 "restricted portable without secret references",
-			profile:              builderv0.KubernetesOutputProfile_KUBERNETES_OUTPUT_PROFILE_RESTRICTED_PORTABLE_V1,
+			profile:              builderv1.KubernetesOutputProfile_KUBERNETES_OUTPUT_PROFILE_RESTRICTED_PORTABLE_V1,
 			validateServerSide:   true,
-			serverSideValidation: builderv0.KubernetesManifestValidation_STATUS_PASSED,
+			serverSideValidation: builderv1.KubernetesManifestValidation_STATUS_PASSED,
 			restricted:           true,
 		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			destination := t.TempDir()
-			response, err := builder.Deploy(ctx, &builderv0.DeploymentRequest{
+			response, err := builder.Deploy(ctx, &builderv1.DeploymentRequest{
 				Environment:                environmentProto,
 				DependenciesConfigurations: test.dependencyConfiguration,
-				Deployment: &builderv0.Deployment{
-					Kind: &builderv0.Deployment_Kubernetes{
-						Kubernetes: &builderv0.KubernetesDeployment{
+				Deployment: &builderv1.Deployment{
+					Kind: &builderv1.Deployment_Kubernetes{
+						Kubernetes: &builderv1.KubernetesDeployment{
 							Namespace:   "codefly-test",
 							Destination: destination,
-							BuildContext: &builderv0.DockerBuildContext{
+							BuildContext: &builderv1.DockerBuildContext{
 								DockerRepository: "registry.example.com",
 								ImageDigest:      "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 							},
@@ -114,16 +114,16 @@ func TestDeployProfiles(t *testing.T) {
 				},
 			})
 			require.NoError(t, err)
-			require.Equal(t, builderv0.DeploymentStatus_SUCCESS, response.GetState().GetState())
+			require.Equal(t, builderv1.DeploymentStatus_SUCCESS, response.GetState().GetState())
 			output := response.GetDeployment().GetKubernetes()
 			require.Equal(t, test.profile, output.GetProfile())
 			require.Equal(t, services.KubernetesManifestContractVersion, output.GetContractVersion())
-			require.Equal(t, builderv0.KubernetesManifestValidation_STATUS_PASSED, output.GetValidation().GetStaticValidation())
+			require.Equal(t, builderv1.KubernetesManifestValidation_STATUS_PASSED, output.GetValidation().GetStaticValidation())
 			require.Equal(t, test.serverSideValidation, output.GetValidation().GetServerSideValidation())
 			require.Equal(t, test.restricted, output.GetValidation().GetRestricted())
 
 			deployment := readDeploymentFile(t, destination, "base", "deployment.yaml")
-			if test.profile == builderv0.KubernetesOutputProfile_KUBERNETES_OUTPUT_PROFILE_EPHEMERAL_LOCAL_APPLY_V1 {
+			if test.profile == builderv1.KubernetesOutputProfile_KUBERNETES_OUTPUT_PROFILE_EPHEMERAL_LOCAL_APPLY_V1 {
 				namespace := readDeploymentFile(t, destination, "base", "namespace.yaml")
 				require.Contains(t, namespace, "kind: Namespace")
 				require.Contains(t, namespace, "app.kubernetes.io/managed-by: codefly")
@@ -193,32 +193,32 @@ func TestDeployRendersSpecEnvironmentAsContainerEnv(t *testing.T) {
 	require.NoError(t, err)
 
 	builder := NewBuilder(NewService())
-	_, err = builder.Load(ctx, &builderv0.LoadRequest{
+	_, err = builder.Load(ctx, &builderv1.LoadRequest{
 		Identity:     identity,
-		CreationMode: &builderv0.CreationMode{Communicate: false},
+		CreationMode: &builderv1.CreationMode{Communicate: false},
 	})
 	require.NoError(t, err)
 	builder.Settings.Environment = map[string]string{"FRONTEND_SKIN_DIR": "/etc/codefly/skin"}
 
 	destination := t.TempDir()
-	response, err := builder.Deploy(ctx, &builderv0.DeploymentRequest{
+	response, err := builder.Deploy(ctx, &builderv1.DeploymentRequest{
 		Environment: environmentProto,
-		Deployment: &builderv0.Deployment{
-			Kind: &builderv0.Deployment_Kubernetes{
-				Kubernetes: &builderv0.KubernetesDeployment{
+		Deployment: &builderv1.Deployment{
+			Kind: &builderv1.Deployment_Kubernetes{
+				Kubernetes: &builderv1.KubernetesDeployment{
 					Namespace:   "codefly-test",
 					Destination: destination,
-					BuildContext: &builderv0.DockerBuildContext{
+					BuildContext: &builderv1.DockerBuildContext{
 						DockerRepository: "registry.example.com",
 						ImageDigest:      "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 					},
-					Profile: builderv0.KubernetesOutputProfile_KUBERNETES_OUTPUT_PROFILE_RESTRICTED_PORTABLE_V1,
+					Profile: builderv1.KubernetesOutputProfile_KUBERNETES_OUTPUT_PROFILE_RESTRICTED_PORTABLE_V1,
 				},
 			},
 		},
 	})
 	require.NoError(t, err)
-	require.Equal(t, builderv0.DeploymentStatus_SUCCESS, response.GetState().GetState())
+	require.Equal(t, builderv1.DeploymentStatus_SUCCESS, response.GetState().GetState())
 
 	// The env var lands in the deploy ConfigMap, which the container consumes
 	// through the base deployment's envFrom.
@@ -264,37 +264,37 @@ func TestDeployConfigMountsDeriveVolumeNamesAndRenderDeterministically(t *testin
 		"config mount rendering must be deterministic across independent renders")
 }
 
-func deployConfigMounts(t *testing.T, identity *basev0.ServiceIdentity, environment *basev0.Environment, mounts []ConfigMount) string {
+func deployConfigMounts(t *testing.T, identity *basev1.ServiceIdentity, environment *basev1.Environment, mounts []ConfigMount) string {
 	t.Helper()
 	ctx := context.Background()
 	builder := NewBuilder(NewService())
-	_, err := builder.Load(ctx, &builderv0.LoadRequest{
+	_, err := builder.Load(ctx, &builderv1.LoadRequest{
 		Identity:     identity,
-		CreationMode: &builderv0.CreationMode{Communicate: false},
+		CreationMode: &builderv1.CreationMode{Communicate: false},
 	})
 	require.NoError(t, err)
 	builder.Settings.ConfigMounts = mounts
 
 	destination := t.TempDir()
-	response, err := builder.Deploy(ctx, &builderv0.DeploymentRequest{
+	response, err := builder.Deploy(ctx, &builderv1.DeploymentRequest{
 		Environment: environment,
-		Deployment: &builderv0.Deployment{
-			Kind: &builderv0.Deployment_Kubernetes{
-				Kubernetes: &builderv0.KubernetesDeployment{
+		Deployment: &builderv1.Deployment{
+			Kind: &builderv1.Deployment_Kubernetes{
+				Kubernetes: &builderv1.KubernetesDeployment{
 					Namespace:   "codefly-test",
 					Destination: destination,
-					BuildContext: &builderv0.DockerBuildContext{
+					BuildContext: &builderv1.DockerBuildContext{
 						DockerRepository: "registry.example.com",
 						ImageDigest:      "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 					},
-					Profile: builderv0.KubernetesOutputProfile_KUBERNETES_OUTPUT_PROFILE_RESTRICTED_PORTABLE_V1,
+					Profile: builderv1.KubernetesOutputProfile_KUBERNETES_OUTPUT_PROFILE_RESTRICTED_PORTABLE_V1,
 				},
 			},
 		},
 	})
 	require.NoError(t, err)
-	require.Equal(t, builderv0.DeploymentStatus_SUCCESS, response.GetState().GetState())
-	require.Equal(t, builderv0.KubernetesManifestValidation_STATUS_PASSED, response.GetDeployment().GetKubernetes().GetValidation().GetStaticValidation())
+	require.Equal(t, builderv1.DeploymentStatus_SUCCESS, response.GetState().GetState())
+	require.Equal(t, builderv1.KubernetesManifestValidation_STATUS_PASSED, response.GetDeployment().GetKubernetes().GetValidation().GetStaticValidation())
 	return readDeploymentFile(t, destination, "base", "deployment.yaml")
 }
 
@@ -316,10 +316,10 @@ func requireNoDeploymentFile(t *testing.T, destination string, elements ...strin
 // to the container's 3000.
 func TestDeployServicePublishesAllocatedPort(t *testing.T) {
 	builder, identity, environment := loadDeployTestBuilder(t)
-	mappings := []*basev0.NetworkMapping{httpMapping(builder, identity, "http", 8080)}
+	mappings := []*basev1.NetworkMapping{httpMapping(builder, identity, "http", 8080)}
 
 	service, output := deployServiceManifest(t, builder, environment, mappings)
-	require.Equal(t, builderv0.KubernetesManifestValidation_STATUS_PASSED, output.GetValidation().GetStaticValidation())
+	require.Equal(t, builderv1.KubernetesManifestValidation_STATUS_PASSED, output.GetValidation().GetStaticValidation())
 	require.Contains(t, service, "  ports:\n    - port: 8080\n      targetPort: 3000\n")
 	require.NotContains(t, service, "port: 3000\n")
 	require.NotContains(t, service, "name: http-")
@@ -327,17 +327,17 @@ func TestDeployServicePublishesAllocatedPort(t *testing.T) {
 
 func TestDeployServiceNamesPortsOnlyWhenMoreThanOne(t *testing.T) {
 	builder, identity, environment := loadDeployTestBuilder(t)
-	mappings := []*basev0.NetworkMapping{
+	mappings := []*basev1.NetworkMapping{
 		httpMapping(builder, identity, "http", 8080),
 		httpMapping(builder, identity, "admin", 8081),
 		// Another service's endpoint and an external endpoint of this one are
 		// never published by this Service.
 		{
-			Endpoint:  &basev0.Endpoint{Name: "http", Module: identity.Module, Service: "other", Api: standards.HTTP},
-			Instances: []*basev0.NetworkInstance{containerInstance(9090)},
+			Endpoint:  &basev1.Endpoint{Name: "http", Module: identity.Module, Service: "other", Api: standards.HTTP},
+			Instances: []*basev1.NetworkInstance{containerInstance(9090)},
 		},
 		{
-			Endpoint: &basev0.Endpoint{Name: "public", Module: identity.Module, Service: identity.Name, Api: standards.HTTP, Visibility: resources.VisibilityPublic,
+			Endpoint: &basev1.Endpoint{Name: "public", Module: identity.Module, Service: identity.Name, Api: standards.HTTP, Visibility: resources.VisibilityPublic,
 				// `external` was a VISIBILITY before core v0.14.0 and is a LOCATION
 				// now: the endpoint lives outside the workspace, so the system
 				// allocates it no address and this Service never publishes it —
@@ -345,12 +345,12 @@ func TestDeployServiceNamesPortsOnlyWhenMoreThanOne(t *testing.T) {
 				// exposure `public` beside location `external` for the same
 				// reason, so the exposure is `none`.
 				Location: resources.LocationExternal, Exposure: resources.ExposureNone},
-			Instances: []*basev0.NetworkInstance{containerInstance(9091)},
+			Instances: []*basev1.NetworkInstance{containerInstance(9091)},
 		},
 	}
 
 	service, output := deployServiceManifest(t, builder, environment, mappings)
-	require.Equal(t, builderv0.KubernetesManifestValidation_STATUS_PASSED, output.GetValidation().GetStaticValidation())
+	require.Equal(t, builderv1.KubernetesManifestValidation_STATUS_PASSED, output.GetValidation().GetStaticValidation())
 	require.Contains(t, service, "    - name: http-8080\n      port: 8080\n      targetPort: 3000\n")
 	require.Contains(t, service, "    - name: http-8081\n      port: 8081\n      targetPort: 3000\n")
 	require.NotContains(t, service, "9090")
@@ -363,68 +363,68 @@ func TestDeployServiceFallsBackToContainerPortWithoutMapping(t *testing.T) {
 	builder, _, environment := loadDeployTestBuilder(t)
 
 	service, output := deployServiceManifest(t, builder, environment, nil)
-	require.Equal(t, builderv0.KubernetesManifestValidation_STATUS_PASSED, output.GetValidation().GetStaticValidation())
+	require.Equal(t, builderv1.KubernetesManifestValidation_STATUS_PASSED, output.GetValidation().GetStaticValidation())
 	require.Contains(t, service, "  ports:\n    - port: 3000\n      targetPort: 3000\n")
 }
 
-func loadDeployTestBuilder(t *testing.T) (*Builder, *basev0.ServiceIdentity, *basev0.Environment) {
+func loadDeployTestBuilder(t *testing.T) (*Builder, *basev1.ServiceIdentity, *basev1.Environment) {
 	t.Helper()
 	ctx := context.Background()
 	identity, environment := testIdentity(t, t.TempDir())
 	environmentProto, err := environment.Proto()
 	require.NoError(t, err)
 	builder := NewBuilder(NewService())
-	_, err = builder.Load(ctx, &builderv0.LoadRequest{
+	_, err = builder.Load(ctx, &builderv1.LoadRequest{
 		Identity:     identity,
-		CreationMode: &builderv0.CreationMode{Communicate: false},
+		CreationMode: &builderv1.CreationMode{Communicate: false},
 	})
 	require.NoError(t, err)
 	if builder.HttpEndpoint == nil {
-		builder.HttpEndpoint = &basev0.Endpoint{Name: "http", Module: identity.Module, Service: identity.Name, Api: standards.HTTP}
+		builder.HttpEndpoint = &basev1.Endpoint{Name: "http", Module: identity.Module, Service: identity.Name, Api: standards.HTTP}
 	}
 	return builder, identity, environmentProto
 }
 
-func httpMapping(builder *Builder, identity *basev0.ServiceIdentity, name string, port uint32) *basev0.NetworkMapping {
-	return &basev0.NetworkMapping{
-		Endpoint: &basev0.Endpoint{
+func httpMapping(builder *Builder, identity *basev1.ServiceIdentity, name string, port uint32) *basev1.NetworkMapping {
+	return &basev1.NetworkMapping{
+		Endpoint: &basev1.Endpoint{
 			Name:       name,
 			Module:     builder.HttpEndpoint.GetModule(),
 			Service:    builder.HttpEndpoint.GetService(),
 			Api:        standards.HTTP,
 			Visibility: resources.VisibilityPublic, Exposure: resources.ExposurePublic,
 		},
-		Instances: []*basev0.NetworkInstance{containerInstance(port)},
+		Instances: []*basev1.NetworkInstance{containerInstance(port)},
 	}
 }
 
-func containerInstance(port uint32) *basev0.NetworkInstance {
+func containerInstance(port uint32) *basev1.NetworkInstance {
 	instance := resources.NewNetworkInstance("frontend.codefly-test.svc.cluster.local", uint16(port))
 	instance.Access = resources.NewContainerNetworkAccess()
 	return instance
 }
 
-func deployServiceManifest(t *testing.T, builder *Builder, environment *basev0.Environment, mappings []*basev0.NetworkMapping) (string, *builderv0.KubernetesDeploymentOutput) {
+func deployServiceManifest(t *testing.T, builder *Builder, environment *basev1.Environment, mappings []*basev1.NetworkMapping) (string, *builderv1.KubernetesDeploymentOutput) {
 	t.Helper()
 	destination := t.TempDir()
-	response, err := builder.Deploy(context.Background(), &builderv0.DeploymentRequest{
+	response, err := builder.Deploy(context.Background(), &builderv1.DeploymentRequest{
 		Environment:     environment,
 		NetworkMappings: mappings,
-		Deployment: &builderv0.Deployment{
-			Kind: &builderv0.Deployment_Kubernetes{
-				Kubernetes: &builderv0.KubernetesDeployment{
+		Deployment: &builderv1.Deployment{
+			Kind: &builderv1.Deployment_Kubernetes{
+				Kubernetes: &builderv1.KubernetesDeployment{
 					Namespace:   "codefly-test",
 					Destination: destination,
-					BuildContext: &builderv0.DockerBuildContext{
+					BuildContext: &builderv1.DockerBuildContext{
 						DockerRepository: "registry.example.com",
 						ImageDigest:      "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 					},
-					Profile: builderv0.KubernetesOutputProfile_KUBERNETES_OUTPUT_PROFILE_RESTRICTED_PORTABLE_V1,
+					Profile: builderv1.KubernetesOutputProfile_KUBERNETES_OUTPUT_PROFILE_RESTRICTED_PORTABLE_V1,
 				},
 			},
 		},
 	})
 	require.NoError(t, err)
-	require.Equal(t, builderv0.DeploymentStatus_SUCCESS, response.GetState().GetState(), response.GetState().GetMessage())
+	require.Equal(t, builderv1.DeploymentStatus_SUCCESS, response.GetState().GetState(), response.GetState().GetMessage())
 	return readDeploymentFile(t, destination, "base", "service.yaml"), response.GetDeployment().GetKubernetes()
 }

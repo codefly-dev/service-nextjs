@@ -16,7 +16,7 @@ import (
 
 	"github.com/codefly-dev/core/agents"
 	"github.com/codefly-dev/core/ciinputs"
-	agentv0 "github.com/codefly-dev/core/generated/go/codefly/services/agent/v0"
+	agentv1 "github.com/codefly-dev/core/generated/go/codefly/services/agent/v1"
 	"github.com/codefly-dev/core/resources"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -160,7 +160,7 @@ func (s *Service) inputProject(ctx context.Context) (*inputProject, error) {
 	return project, nil
 }
 
-func (s *Service) GetEffectiveInputs(ctx context.Context, req *agentv0.GetEffectiveInputsRequest) (*agentv0.GetEffectiveInputsResponse, error) {
+func (s *Service) GetEffectiveInputs(ctx context.Context, req *agentv1.GetEffectiveInputsRequest) (*agentv1.GetEffectiveInputsResponse, error) {
 	if ctx.Err() != nil {
 		return nil, status.FromContextError(ctx.Err()).Err()
 	}
@@ -177,9 +177,9 @@ func (s *Service) GetEffectiveInputs(ctx context.Context, req *agentv0.GetEffect
 	if _, err = ciinputs.Evaluate(nil, req, required); err != nil {
 		return nil, status.Error(codes.InvalidArgument, "invalid effective input context")
 	}
-	response := &agentv0.GetEffectiveInputsResponse{SchemaVersion: ciinputs.Version, Snapshot: req.Snapshot}
+	response := &agentv1.GetEffectiveInputsResponse{SchemaVersion: ciinputs.Version, Snapshot: req.Snapshot}
 	for _, key := range required {
-		response.Tasks = append(response.Tasks, &agentv0.TaskInputs{Task: &agentv0.TaskKey{Phase: key.Phase, Suite: key.Suite}})
+		response.Tasks = append(response.Tasks, &agentv1.TaskInputs{Task: &agentv1.TaskKey{Phase: key.Phase, Suite: key.Suite}})
 	}
 	// Two requests cannot be inspected: one naming a source state other than the
 	// current worktree, and one whose context is larger than the transport bounds.
@@ -198,7 +198,7 @@ func (s *Service) GetEffectiveInputs(ctx context.Context, req *agentv0.GetEffect
 		return nil, status.FromContextError(ctx.Err()).Err()
 	}
 	for _, task := range response.Tasks {
-		if task.Task.Phase == agentv0.TaskPhase_TASK_PHASE_SBOM {
+		if task.Task.Phase == agentv1.TaskPhase_TASK_PHASE_SBOM {
 			s.declareSBOMInputs(project, task, req.Context)
 			continue
 		}
@@ -215,20 +215,20 @@ func (s *Service) GetEffectiveInputs(ctx context.Context, req *agentv0.GetEffect
 // carries the unresolved-consumption marker because framework observation does
 // not establish dynamic or configuration-time reads, and additionally records
 // whether isolated inspection ran, was verifiable, and covered the task.
-func declareTaskInputs(project *inputProject, task *agentv0.TaskInputs, contextInputs []*agentv0.EffectiveInput, native nativeInputs) {
+func declareTaskInputs(project *inputProject, task *agentv1.TaskInputs, contextInputs []*agentv1.EffectiveInput, native nativeInputs) {
 	name := inputTaskName(task.Task)
-	task.Inputs = []*agentv0.EffectiveInput{
-		marker(agentv0.EffectiveInputKind_EFFECTIVE_INPUT_KIND_CONFIGURATION, project.owner, markerDynamicConsumption),
+	task.Inputs = []*agentv1.EffectiveInput{
+		marker(agentv1.EffectiveInputKind_EFFECTIVE_INPUT_KIND_CONFIGURATION, project.owner, markerDynamicConsumption),
 	}
 	if nativeInspectsPhase(task.Task.Phase) {
 		switch {
 		case !native.Available:
-			task.Inputs = append(task.Inputs, marker(agentv0.EffectiveInputKind_EFFECTIVE_INPUT_KIND_TOOLCHAIN, project.owner, markerInspectionUnavailable))
+			task.Inputs = append(task.Inputs, marker(agentv1.EffectiveInputKind_EFFECTIVE_INPUT_KIND_TOOLCHAIN, project.owner, markerInspectionUnavailable))
 		case native.Incomplete[name]:
-			task.Inputs = append(task.Inputs, marker(agentv0.EffectiveInputKind_EFFECTIVE_INPUT_KIND_TOOLCHAIN, project.owner, markerObservationIncomplete))
+			task.Inputs = append(task.Inputs, marker(agentv1.EffectiveInputKind_EFFECTIVE_INPUT_KIND_TOOLCHAIN, project.owner, markerObservationIncomplete))
 		}
 		if !native.CleanupVerified {
-			task.Inputs = append(task.Inputs, marker(agentv0.EffectiveInputKind_EFFECTIVE_INPUT_KIND_TOOLCHAIN, project.owner, markerIsolationUnverified))
+			task.Inputs = append(task.Inputs, marker(agentv1.EffectiveInputKind_EFFECTIVE_INPUT_KIND_TOOLCHAIN, project.owner, markerIsolationUnverified))
 		}
 	}
 	names := []string{filepath.Join(project.root, "service.codefly.yaml"), filepath.Join(project.source, "package.json")}
@@ -254,10 +254,10 @@ func declareTaskInputs(project *inputProject, task *agentv0.TaskInputs, contextI
 // and Core validates uniqueness on the unresolved pair, so both reach this
 // agent. Participation is therefore merged per resolved owner: emitting per
 // declared entry would repeat an input identity, which Core rejects outright.
-func declareDependencies(project *inputProject, task *agentv0.TaskInputs, contextInputs []*agentv0.EffectiveInput) {
+func declareDependencies(project *inputProject, task *agentv1.TaskInputs, contextInputs []*agentv1.EffectiveInput) {
 	type participation struct{ runs, builds bool }
 	startsDependencies := nextTaskStartsDependencies(task.Task)
-	buildsArtifact := task.Task.Phase == agentv0.TaskPhase_TASK_PHASE_ARTIFACT_BUILD
+	buildsArtifact := task.Task.Phase == agentv1.TaskPhase_TASK_PHASE_ARTIFACT_BUILD
 	owners := map[string]*participation{}
 	var order []string
 	for _, dep := range project.service.ServiceDependencies {
@@ -287,10 +287,10 @@ func declareDependencies(project *inputProject, task *agentv0.TaskInputs, contex
 			if in.Owner != owner || in.Path {
 				continue
 			}
-			runtimeIdentity := entry.runs && in.Kind == agentv0.EffectiveInputKind_EFFECTIVE_INPUT_KIND_SERVICE_IMPLEMENTATION
-			buildIdentity := entry.builds && (in.Kind == agentv0.EffectiveInputKind_EFFECTIVE_INPUT_KIND_ARTIFACT || in.Kind == agentv0.EffectiveInputKind_EFFECTIVE_INPUT_KIND_GENERATED_CONTRACT)
+			runtimeIdentity := entry.runs && in.Kind == agentv1.EffectiveInputKind_EFFECTIVE_INPUT_KIND_SERVICE_IMPLEMENTATION
+			buildIdentity := entry.builds && (in.Kind == agentv1.EffectiveInputKind_EFFECTIVE_INPUT_KIND_ARTIFACT || in.Kind == agentv1.EffectiveInputKind_EFFECTIVE_INPUT_KIND_GENERATED_CONTRACT)
 			if runtimeIdentity || buildIdentity {
-				task.Inputs = append(task.Inputs, proto.Clone(in).(*agentv0.EffectiveInput))
+				task.Inputs = append(task.Inputs, proto.Clone(in).(*agentv1.EffectiveInput))
 			}
 		}
 	}
@@ -301,37 +301,37 @@ func declareDependencies(project *inputProject, task *agentv0.TaskInputs, contex
 		// A stack-starting suite needs the transitive runtime closure. This agent
 		// reads only its own service declaration, so the list below is a subset;
 		// saying so keeps it from being mistaken for the whole stack.
-		task.Inputs = append(task.Inputs, marker(agentv0.EffectiveInputKind_EFFECTIVE_INPUT_KIND_CONFIGURATION, project.owner, markerRuntimeClosureUnresolved))
+		task.Inputs = append(task.Inputs, marker(agentv1.EffectiveInputKind_EFFECTIVE_INPUT_KIND_CONFIGURATION, project.owner, markerRuntimeClosureUnresolved))
 	}
 	slices.Sort(task.RuntimeServices)
 	task.RuntimeServices = slices.Compact(task.RuntimeServices)
 }
 
-func (s *Service) declareSBOMInputs(project *inputProject, task *agentv0.TaskInputs, contextInputs []*agentv0.EffectiveInput) {
+func (s *Service) declareSBOMInputs(project *inputProject, task *agentv1.TaskInputs, contextInputs []*agentv1.EffectiveInput) {
 	seen := map[string]bool{}
 	declaration := filepath.Join(project.root, "service.codefly.yaml")
 	lockfile := filepath.Join(project.source, "package-lock.json")
 	appendInputPath(project, declaration, task, seen)
 	appendInputPath(project, lockfile, task, seen)
 
-	options := marker(agentv0.EffectiveInputKind_EFFECTIVE_INPUT_KIND_CONFIGURATION, project.owner, "sbom/options")
+	options := marker(agentv1.EffectiveInputKind_EFFECTIVE_INPUT_KIND_CONFIGURATION, project.owner, "sbom/options")
 	optionsResolved := false
 	for _, in := range contextInputs {
 		if in.Kind != options.Kind || in.Owner != options.Owner || in.Name != options.Name {
 			continue
 		}
-		optionsResolved = in.GetIdentity().GetKind() == agentv0.EffectiveIdentityKind_EFFECTIVE_IDENTITY_KIND_VERSIONED &&
+		optionsResolved = in.GetIdentity().GetKind() == agentv1.EffectiveIdentityKind_EFFECTIVE_IDENTITY_KIND_VERSIONED &&
 			in.Identity.Namespace == "codefly.nextjs.sbom-options/v1" &&
 			(in.Identity.Digest == "include-dev=false" || in.Identity.Digest == "include-dev=true")
 		break
 	}
 	// Core sets this public identity only after verifying the provider artifact.
 	artifact := os.Getenv("CODEFLY_PROVIDER_ARTIFACT_DIGEST")
-	plugin := marker(agentv0.EffectiveInputKind_EFFECTIVE_INPUT_KIND_PLUGIN, "codefly.dev/nextjs", "agent")
-	toolchain := marker(agentv0.EffectiveInputKind_EFFECTIVE_INPUT_KIND_TOOLCHAIN, "codefly.dev/nextjs", "sbom/executable")
+	plugin := marker(agentv1.EffectiveInputKind_EFFECTIVE_INPUT_KIND_PLUGIN, "codefly.dev/nextjs", "agent")
+	toolchain := marker(agentv1.EffectiveInputKind_EFFECTIVE_INPUT_KIND_TOOLCHAIN, "codefly.dev/nextjs", "sbom/executable")
 	if strings.HasPrefix(artifact, "sha256:") && len(artifact) == 71 {
-		plugin.Identity = &agentv0.EffectiveIdentity{Kind: agentv0.EffectiveIdentityKind_EFFECTIVE_IDENTITY_KIND_VERSIONED, Namespace: "codefly.provider-artifact/v1", Digest: artifact}
-		toolchain.Identity = &agentv0.EffectiveIdentity{Kind: agentv0.EffectiveIdentityKind_EFFECTIVE_IDENTITY_KIND_VERSIONED, Namespace: "codefly.nextjs.sbom-toolchain/v1", Digest: artifact + "/" + runtime.GOOS + "/" + runtime.GOARCH}
+		plugin.Identity = &agentv1.EffectiveIdentity{Kind: agentv1.EffectiveIdentityKind_EFFECTIVE_IDENTITY_KIND_VERSIONED, Namespace: "codefly.provider-artifact/v1", Digest: artifact}
+		toolchain.Identity = &agentv1.EffectiveIdentity{Kind: agentv1.EffectiveIdentityKind_EFFECTIVE_IDENTITY_KIND_VERSIONED, Namespace: "codefly.nextjs.sbom-toolchain/v1", Digest: artifact + "/" + runtime.GOOS + "/" + runtime.GOARCH}
 	}
 	task.Inputs = append(task.Inputs, options, plugin, toolchain)
 	finalizeTaskInputs(task, contextInputs)
@@ -377,8 +377,8 @@ func sameDirectory(left, right string) bool {
 // and an identity is declared at most once. Matching on anything else — a file
 // mode read from the filesystem, say — lets the agent contradict context it
 // meant to adopt, which fails the caller's whole discovery.
-func finalizeTaskInputs(task *agentv0.TaskInputs, contextInputs []*agentv0.EffectiveInput) {
-	supplied := make(map[string]*agentv0.EffectiveInput, len(contextInputs))
+func finalizeTaskInputs(task *agentv1.TaskInputs, contextInputs []*agentv1.EffectiveInput) {
+	supplied := make(map[string]*agentv1.EffectiveInput, len(contextInputs))
 	for _, in := range contextInputs {
 		supplied[effectiveInputKey(in)] = in
 	}
@@ -391,7 +391,7 @@ func finalizeTaskInputs(task *agentv0.TaskInputs, contextInputs []*agentv0.Effec
 		}
 		seen[key] = true
 		if resolved, ok := supplied[key]; ok {
-			in = proto.Clone(resolved).(*agentv0.EffectiveInput)
+			in = proto.Clone(resolved).(*agentv1.EffectiveInput)
 		}
 		kept = append(kept, in)
 	}
@@ -400,12 +400,12 @@ func finalizeTaskInputs(task *agentv0.TaskInputs, contextInputs []*agentv0.Effec
 
 // effectiveInputKey mirrors the identity Core uses to detect contradictions and
 // duplicates. It must not drift from ciinputs' own key.
-func effectiveInputKey(in *agentv0.EffectiveInput) string {
+func effectiveInputKey(in *agentv1.EffectiveInput) string {
 	return fmt.Sprintf("%d\x00%s\x00%s", in.Kind, in.Owner, in.Name)
 }
 
-func marker(kind agentv0.EffectiveInputKind, owner, name string) *agentv0.EffectiveInput {
-	return &agentv0.EffectiveInput{Kind: kind, Owner: owner, Name: name}
+func marker(kind agentv1.EffectiveInputKind, owner, name string) *agentv1.EffectiveInput {
+	return &agentv1.EffectiveInput{Kind: kind, Owner: owner, Name: name}
 }
 
 // boundResponse keeps the declaration inside the transport budget without
@@ -413,17 +413,17 @@ func marker(kind agentv0.EffectiveInputKind, owner, name string) *agentv0.Effect
 // from the largest tasks first, and only as far as needed; runtime services
 // state which services a suite must have started, and no size condition makes
 // that untrue, so they are surrendered only when nothing else is left.
-func boundResponse(response *agentv0.GetEffectiveInputsResponse, owner string) {
+func boundResponse(response *agentv1.GetEffectiveInputsResponse, owner string) {
 	if proto.Size(response) <= inputResponseLimit {
 		return
 	}
 	order := slices.Clone(response.Tasks)
-	slices.SortFunc(order, func(a, b *agentv0.TaskInputs) int { return proto.Size(b) - proto.Size(a) })
+	slices.SortFunc(order, func(a, b *agentv1.TaskInputs) int { return proto.Size(b) - proto.Size(a) })
 	for _, task := range order {
 		if proto.Size(response) <= inputResponseLimit {
 			return
 		}
-		task.Inputs = []*agentv0.EffectiveInput{marker(agentv0.EffectiveInputKind_EFFECTIVE_INPUT_KIND_CONFIGURATION, owner, markerTransportTruncated)}
+		task.Inputs = []*agentv1.EffectiveInput{marker(agentv1.EffectiveInputKind_EFFECTIVE_INPUT_KIND_CONFIGURATION, owner, markerTransportTruncated)}
 		task.Complete = false
 	}
 	for _, task := range order {
@@ -434,8 +434,8 @@ func boundResponse(response *agentv0.GetEffectiveInputsResponse, owner string) {
 	}
 }
 
-func inputTaskName(task *agentv0.TaskKey) string {
-	if task.Phase == agentv0.TaskPhase_TASK_PHASE_TEST {
+func inputTaskName(task *agentv1.TaskKey) string {
+	if task.Phase == agentv1.TaskPhase_TASK_PHASE_TEST {
 		return "test/" + task.Suite
 	}
 	return task.Phase.String()
@@ -443,33 +443,33 @@ func inputTaskName(task *agentv0.TaskKey) string {
 
 // nativeInspectsPhase reports which phases isolated inspection covers. The
 // discovery loop and the declaration both read it here so they cannot drift.
-func nativeInspectsPhase(phase agentv0.TaskPhase) bool {
-	return phase == agentv0.TaskPhase_TASK_PHASE_TEST ||
-		phase == agentv0.TaskPhase_TASK_PHASE_ARTIFACT_BUILD ||
-		phase == agentv0.TaskPhase_TASK_PHASE_COMPILE
+func nativeInspectsPhase(phase agentv1.TaskPhase) bool {
+	return phase == agentv1.TaskPhase_TASK_PHASE_TEST ||
+		phase == agentv1.TaskPhase_TASK_PHASE_ARTIFACT_BUILD ||
+		phase == agentv1.TaskPhase_TASK_PHASE_COMPILE
 }
 
-func suiteDependencyMode(task *agentv0.TaskKey) agentv0.TestDependencyMode {
-	if task.Phase != agentv0.TaskPhase_TASK_PHASE_TEST {
-		return agentv0.TestDependencyMode_TEST_DEPENDENCY_MODE_NONE
+func suiteDependencyMode(task *agentv1.TaskKey) agentv1.TestDependencyMode {
+	if task.Phase != agentv1.TaskPhase_TASK_PHASE_TEST {
+		return agentv1.TestDependencyMode_TEST_DEPENDENCY_MODE_NONE
 	}
 	for _, suite := range nextValidationCapabilities().Test.Suites {
 		if suite.Name == task.Suite {
 			return suite.DependencyMode
 		}
 	}
-	return agentv0.TestDependencyMode_TEST_DEPENDENCY_MODE_NONE
+	return agentv1.TestDependencyMode_TEST_DEPENDENCY_MODE_NONE
 }
 
-func nextTaskStartsDependencies(task *agentv0.TaskKey) bool {
-	return suiteDependencyMode(task) != agentv0.TestDependencyMode_TEST_DEPENDENCY_MODE_NONE
+func nextTaskStartsDependencies(task *agentv1.TaskKey) bool {
+	return suiteDependencyMode(task) != agentv1.TestDependencyMode_TEST_DEPENDENCY_MODE_NONE
 }
 
-func nextTaskStartsStack(task *agentv0.TaskKey) bool {
-	return suiteDependencyMode(task) == agentv0.TestDependencyMode_TEST_DEPENDENCY_MODE_START_STACK
+func nextTaskStartsStack(task *agentv1.TaskKey) bool {
+	return suiteDependencyMode(task) == agentv1.TestDependencyMode_TEST_DEPENDENCY_MODE_START_STACK
 }
 
-func appendInputPath(project *inputProject, name string, task *agentv0.TaskInputs, seen map[string]bool) {
+func appendInputPath(project *inputProject, name string, task *agentv1.TaskInputs, seen map[string]bool) {
 	name = filepath.Clean(name)
 	relative, err := filepath.Rel(project.workspace, name)
 	if err != nil || !filepath.IsLocal(relative) || seen[relative] || len(seen) >= nativePathBudget {
@@ -486,15 +486,15 @@ func appendInputPath(project *inputProject, name string, task *agentv0.TaskInput
 			appendInputPath(project, parent, task, seen)
 		}
 	}
-	in := &agentv0.EffectiveInput{Kind: agentv0.EffectiveInputKind_EFFECTIVE_INPUT_KIND_SOURCE, Owner: project.owner, Name: filepath.ToSlash(relative), Path: true, Mode: 0100644, Sensitive: true}
+	in := &agentv1.EffectiveInput{Kind: agentv1.EffectiveInputKind_EFFECTIVE_INPUT_KIND_SOURCE, Owner: project.owner, Name: filepath.ToSlash(relative), Path: true, Mode: 0100644, Sensitive: true}
 	if info.Mode()&0111 != 0 {
 		in.Mode = 0100755
 	}
 	switch base := filepath.Base(name); {
 	case base == "service.codefly.yaml", base == "package.json", base == "tsconfig.json", base == "jsconfig.json":
-		in.Kind = agentv0.EffectiveInputKind_EFFECTIVE_INPUT_KIND_CONFIGURATION
+		in.Kind = agentv1.EffectiveInputKind_EFFECTIVE_INPUT_KIND_CONFIGURATION
 	case slices.Contains(nodeLockfileNames, base):
-		in.Kind = agentv0.EffectiveInputKind_EFFECTIVE_INPUT_KIND_LOCKFILE
+		in.Kind = agentv1.EffectiveInputKind_EFFECTIVE_INPUT_KIND_LOCKFILE
 	}
 	if info.Mode()&os.ModeSymlink != 0 {
 		in.Mode = 0120000
@@ -574,7 +574,7 @@ func discoverNativeInputs(ctx context.Context, project *inputProject) nativeInpu
 		if !nativeInspectsPhase(key.Phase) {
 			continue
 		}
-		task := inputTaskName(&agentv0.TaskKey{Phase: key.Phase, Suite: key.Suite})
+		task := inputTaskName(&agentv1.TaskKey{Phase: key.Phase, Suite: key.Suite})
 		if ctx.Err() != nil {
 			native.Incomplete[task] = true
 			continue
@@ -607,8 +607,8 @@ func discoverNativeInputs(ctx context.Context, project *inputProject) nativeInpu
 // observed: inheriting build paths for a compile task that was never inspected
 // would declare consumption nothing established.
 func unionCompileObservations(native *nativeInputs) {
-	compile := agentv0.TaskPhase_TASK_PHASE_COMPILE.String()
-	build := agentv0.TaskPhase_TASK_PHASE_ARTIFACT_BUILD.String()
+	compile := agentv1.TaskPhase_TASK_PHASE_COMPILE.String()
+	build := agentv1.TaskPhase_TASK_PHASE_ARTIFACT_BUILD.String()
 	if !native.Observed[compile] {
 		return
 	}

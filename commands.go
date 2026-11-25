@@ -7,39 +7,39 @@ import (
 	"net/http"
 	"strings"
 
-	agentv0 "github.com/codefly-dev/core/generated/go/codefly/services/agent/v0"
+	agentv1 "github.com/codefly-dev/core/generated/go/codefly/services/agent/v1"
 	"github.com/codefly-dev/core/resources"
 )
 
 // registerCommands registers agent-specific commands.
 // NOTE: test and lint are standard Runtime RPCs — don't duplicate here.
 func (s *Runtime) registerCommands() {
-	s.RegisterCommand(&agentv0.CommandDefinition{
+	s.RegisterCommand(&agentv1.CommandDefinition{
 		Name:        "screenshot",
 		Description: "Take a screenshot of the running frontend (requires Playwright)",
 		Usage:       `screenshot {"path": "output.png", "url": "/"}`,
 		Tags:        []string{"ui", "testing", "visual"},
 	}, s.cmdScreenshot)
 
-	s.RegisterCommand(&agentv0.CommandDefinition{
+	s.RegisterCommand(&agentv1.CommandDefinition{
 		Name:        "health",
 		Description: "Check if the Next.js frontend is responding",
 		Tags:        []string{"health", "diagnostic"},
 	}, s.cmdHealth)
 
-	s.RegisterCommand(&agentv0.CommandDefinition{
+	s.RegisterCommand(&agentv1.CommandDefinition{
 		Name:        "framework",
 		Description: "Report the Next.js and React versions this service resolves",
 		Tags:        []string{"info", "diagnostic", "dependencies"},
 	}, s.cmdFramework)
 
-	s.RegisterCommand(&agentv0.CommandDefinition{
+	s.RegisterCommand(&agentv1.CommandDefinition{
 		Name:        "routes",
 		Description: "List all page routes in the Next.js app",
 		Tags:        []string{"info", "routing"},
 	}, s.cmdRoutes)
 
-	s.RegisterCommand(&agentv0.CommandDefinition{
+	s.RegisterCommand(&agentv1.CommandDefinition{
 		Name:        "playwright",
 		Description: "Run Playwright end-to-end tests",
 		Usage:       `playwright {"target": "tests/e2e", "headed": false}`,

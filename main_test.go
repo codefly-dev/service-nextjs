@@ -10,11 +10,11 @@ import (
 	"testing"
 	"time"
 
-	agentv0 "github.com/codefly-dev/core/generated/go/codefly/services/agent/v0"
-	builderv0 "github.com/codefly-dev/core/generated/go/codefly/services/builder/v0"
-	runtimev0 "github.com/codefly-dev/core/generated/go/codefly/services/runtime/v0"
+	agentv1 "github.com/codefly-dev/core/generated/go/codefly/services/agent/v1"
+	builderv1 "github.com/codefly-dev/core/generated/go/codefly/services/builder/v1"
+	runtimev1 "github.com/codefly-dev/core/generated/go/codefly/services/runtime/v1"
 
-	basev0 "github.com/codefly-dev/core/generated/go/codefly/base/v0"
+	basev1 "github.com/codefly-dev/core/generated/go/codefly/base/v1"
 	"github.com/codefly-dev/core/network"
 	"github.com/codefly-dev/core/resources"
 	"github.com/codefly-dev/core/wool"
@@ -65,7 +65,7 @@ func TestAgentInformationAdvertisesValidationContract(t *testing.T) {
 	require.True(t, unit.Get(unit.Descriptor().Fields().ByName("default_suite")).Bool())
 }
 
-func testIdentity(t *testing.T, tmpDir string) (*basev0.ServiceIdentity, *resources.Environment) {
+func testIdentity(t *testing.T, tmpDir string) (*basev1.ServiceIdentity, *resources.Environment) {
 	t.Helper()
 	ctx := context.Background()
 
@@ -94,7 +94,7 @@ func testIdentity(t *testing.T, tmpDir string) (*basev0.ServiceIdentity, *resour
 	err = mod.SaveToDir(ctx, path.Join(tmpDir, "mod"))
 	require.NoError(t, err)
 
-	identity := &basev0.ServiceIdentity{
+	identity := &basev1.ServiceIdentity{
 		Name:                service.Name,
 		Version:             service.Version,
 		Module:              "mod",
@@ -117,7 +117,7 @@ func testIdentity(t *testing.T, tmpDir string) (*basev0.ServiceIdentity, *resour
 // and their linked siblings are at the checkout root. A fixture whose
 // workspace always encloses the linked package made an install bound to the
 // workspace look correct and shipped a release that refused both of them.
-func testNestedWorkspaceIdentity(t *testing.T, tmpDir string) (*basev0.ServiceIdentity, *resources.Environment) {
+func testNestedWorkspaceIdentity(t *testing.T, tmpDir string) (*basev1.ServiceIdentity, *resources.Environment) {
 	t.Helper()
 	ctx := context.Background()
 
@@ -133,7 +133,7 @@ func testNestedWorkspaceIdentity(t *testing.T, tmpDir string) (*basev0.ServiceId
 	mod := &resources.Module{Name: "mod"}
 	require.NoError(t, mod.SaveToDir(ctx, path.Join(workspaceDir, "mod")))
 
-	identity := &basev0.ServiceIdentity{
+	identity := &basev1.ServiceIdentity{
 		Name:                service.Name,
 		Version:             service.Version,
 		Module:              "mod",
@@ -170,29 +170,29 @@ func TestInitAppliesRequestedRuntimeContextBeforeNetworkValidation(t *testing.T)
 	identity, environment := testIdentity(t, tmpDir)
 
 	builder := NewBuilder(NewService())
-	_, err := builder.Load(ctx, &builderv0.LoadRequest{
+	_, err := builder.Load(ctx, &builderv1.LoadRequest{
 		Identity:     identity,
-		CreationMode: &builderv0.CreationMode{Communicate: false},
+		CreationMode: &builderv1.CreationMode{Communicate: false},
 	})
 	require.NoError(t, err)
-	_, err = builder.Create(ctx, &builderv0.CreateRequest{})
+	_, err = builder.Create(ctx, &builderv1.CreateRequest{})
 	require.NoError(t, err)
 
 	runtime := NewRuntime(NewService())
 	environmentProto, err := environment.Proto()
 	require.NoError(t, err)
-	_, err = runtime.Load(ctx, &runtimev0.LoadRequest{
+	_, err = runtime.Load(ctx, &runtimev1.LoadRequest{
 		Identity:     identity,
 		Environment:  environmentProto,
 		DisableCatch: true,
 	})
 	require.NoError(t, err)
 
-	response, err := runtime.Init(ctx, &runtimev0.InitRequest{
+	response, err := runtime.Init(ctx, &runtimev1.InitRequest{
 		RuntimeContext: resources.NewRuntimeContextContainer(),
 	})
 	require.NoError(t, err, "runtime failures are returned in the typed init status")
-	require.Equal(t, runtimev0.InitStatus_ERROR, response.GetStatus().GetState())
+	require.Equal(t, runtimev1.InitStatus_ERROR, response.GetStatus().GetState())
 	require.NotNil(t, runtime.Runtime.RuntimeContext)
 	require.Equal(t, resources.RuntimeContextContainer, runtime.Runtime.RuntimeContext.Kind)
 }
@@ -212,7 +212,7 @@ func TestSourceOnlyNodeRuntimeInitializesWithoutHTTPEndpointOrInstallingDependen
 	runtime := NewRuntime(NewService())
 	environmentProto, err := environment.Proto()
 	require.NoError(t, err)
-	_, err = runtime.Load(ctx, &runtimev0.LoadRequest{
+	_, err = runtime.Load(ctx, &runtimev1.LoadRequest{
 		Identity:     identity,
 		Environment:  environmentProto,
 		DisableCatch: true,
@@ -221,22 +221,22 @@ func TestSourceOnlyNodeRuntimeInitializesWithoutHTTPEndpointOrInstallingDependen
 	require.Nil(t, runtime.HttpEndpoint)
 	require.Equal(t, nodeProjectGeneric, runtime.projectKind)
 
-	response, err := runtime.Init(ctx, &runtimev0.InitRequest{
+	response, err := runtime.Init(ctx, &runtimev1.InitRequest{
 		RuntimeContext: resources.NewRuntimeContextNative(),
 	})
 	require.NoError(t, err, "runtime failures are returned in the typed init status")
-	require.Equal(t, runtimev0.InitStatus_READY, response.GetStatus().GetState())
+	require.Equal(t, runtimev1.InitStatus_READY, response.GetStatus().GetState())
 	_, err = os.Stat(path.Join(source, "node_modules"))
 	require.ErrorIs(t, err, os.ErrNotExist, "read-only Init must not install dependencies")
 	_, err = os.Stat(path.Join(source, "package-lock.json"))
 	require.ErrorIs(t, err, os.ErrNotExist, "read-only Init must not generate a lockfile")
 
-	start, err := runtime.Start(ctx, &runtimev0.StartRequest{})
+	start, err := runtime.Start(ctx, &runtimev1.StartRequest{})
 	require.NoError(t, err, "runtime failures are returned in the typed start status")
-	require.Equal(t, runtimev0.StartStatus_ERROR, start.GetStatus().GetState())
+	require.Equal(t, runtimev1.StartStatus_ERROR, start.GetStatus().GetState())
 	require.Contains(t, start.GetStatus().GetMessage(), "requires an HTTP endpoint")
 
-	_, err = runtime.Destroy(ctx, &runtimev0.DestroyRequest{})
+	_, err = runtime.Destroy(ctx, &runtimev1.DestroyRequest{})
 	require.NoError(t, err)
 }
 
@@ -374,16 +374,16 @@ func TestBuilderCreate(t *testing.T) {
 	builder := NewBuilder(NewService())
 
 	// Load in creation mode (no interactive prompts)
-	resp, err := builder.Load(ctx, &builderv0.LoadRequest{
+	resp, err := builder.Load(ctx, &builderv1.LoadRequest{
 		Identity:     identity,
-		CreationMode: &builderv0.CreationMode{Communicate: false},
+		CreationMode: &builderv1.CreationMode{Communicate: false},
 	})
 	require.NoError(t, err)
 	require.NotNil(t, resp)
 	require.Contains(t, resp.GetGettingStarted(), "composition root")
 
 	// Create the service
-	createResp, err := builder.Create(ctx, &builderv0.CreateRequest{})
+	createResp, err := builder.Create(ctx, &builderv1.CreateRequest{})
 	require.NoError(t, err)
 	require.NotNil(t, createResp)
 
@@ -478,13 +478,13 @@ func TestBuilderSettingsDefaults(t *testing.T) {
 
 	builder := NewBuilder(NewService())
 
-	_, err := builder.Load(ctx, &builderv0.LoadRequest{
+	_, err := builder.Load(ctx, &builderv1.LoadRequest{
 		Identity:     identity,
-		CreationMode: &builderv0.CreationMode{Communicate: false},
+		CreationMode: &builderv1.CreationMode{Communicate: false},
 	})
 	require.NoError(t, err)
 
-	_, err = builder.Create(ctx, &builderv0.CreateRequest{})
+	_, err = builder.Create(ctx, &builderv1.CreateRequest{})
 	require.NoError(t, err)
 
 	// Default is SSR mode with standalone output
@@ -507,22 +507,22 @@ func TestBuilderStaticConfigPinsWatchRoot(t *testing.T) {
 	identity, _ := testIdentity(t, tmpDir)
 
 	builder := NewBuilder(NewService())
-	_, err := builder.Load(ctx, &builderv0.LoadRequest{
+	_, err := builder.Load(ctx, &builderv1.LoadRequest{
 		Identity:     identity,
-		CreationMode: &builderv0.CreationMode{Communicate: true},
+		CreationMode: &builderv1.CreationMode{Communicate: true},
 	})
 	require.NoError(t, err)
 
 	// Static export overrides next.config.ts wholesale; it must still pin the
 	// Turbopack watch root so static-mode dev does not watch the churning
 	// parent worktree. Drive Create down the static branch via communicate answers.
-	builder.Builder.CreationMode = &builderv0.CreationMode{Communicate: true}
-	builder.answers = map[string]*agentv0.Answer{
-		Mode:               {Value: &agentv0.Answer_Choice{Choice: &agentv0.ChoiceAnswer{Option: "static"}}},
-		HotReload:          {Value: &agentv0.Answer_Confirm{Confirm: &agentv0.ConfirmAnswer{Confirmed: true}}},
-		AuthProviderOption: {Value: &agentv0.Answer_Choice{Choice: &agentv0.ChoiceAnswer{Option: "none"}}},
+	builder.Builder.CreationMode = &builderv1.CreationMode{Communicate: true}
+	builder.answers = map[string]*agentv1.Answer{
+		Mode:               {Value: &agentv1.Answer_Choice{Choice: &agentv1.ChoiceAnswer{Option: "static"}}},
+		HotReload:          {Value: &agentv1.Answer_Confirm{Confirm: &agentv1.ConfirmAnswer{Confirmed: true}}},
+		AuthProviderOption: {Value: &agentv1.Answer_Choice{Choice: &agentv1.ChoiceAnswer{Option: "none"}}},
 	}
-	_, err = builder.Create(ctx, &builderv0.CreateRequest{})
+	_, err = builder.Create(ctx, &builderv1.CreateRequest{})
 	require.NoError(t, err)
 
 	serviceDir := path.Join(tmpDir, "mod/frontend")
@@ -534,7 +534,7 @@ func TestBuilderStaticConfigPinsWatchRoot(t *testing.T) {
 
 func TestBuilderOptionsUseSingleChoiceProtocol(t *testing.T) {
 	builder := NewBuilder(NewService())
-	builder.Builder.CreationMode = &builderv0.CreationMode{Communicate: true}
+	builder.Builder.CreationMode = &builderv1.CreationMode{Communicate: true}
 
 	questions := builder.Options()
 	require.Len(t, questions, 3)
@@ -563,13 +563,13 @@ func TestCreateToRun(t *testing.T) {
 
 	// 1. Create
 	builder := NewBuilder(NewService())
-	_, err := builder.Load(ctx, &builderv0.LoadRequest{
+	_, err := builder.Load(ctx, &builderv1.LoadRequest{
 		Identity:     identity,
-		CreationMode: &builderv0.CreationMode{Communicate: false},
+		CreationMode: &builderv1.CreationMode{Communicate: false},
 	})
 	require.NoError(t, err)
 
-	_, err = builder.Create(ctx, &builderv0.CreateRequest{})
+	_, err = builder.Create(ctx, &builderv1.CreateRequest{})
 	require.NoError(t, err)
 
 	// 2. npm install
@@ -581,7 +581,7 @@ func TestCreateToRun(t *testing.T) {
 	runtime := NewRuntime(NewService())
 	envProto, err := env.Proto()
 	require.NoError(t, err)
-	_, err = runtime.Load(ctx, &runtimev0.LoadRequest{
+	_, err = runtime.Load(ctx, &runtimev1.LoadRequest{
 		Identity:     identity,
 		Environment:  envProto,
 		DisableCatch: true,
@@ -613,19 +613,19 @@ func TestCreateToRun(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, len(networkMappings))
 
-	_, err = runtime.Init(ctx, &runtimev0.InitRequest{
+	_, err = runtime.Init(ctx, &runtimev1.InitRequest{
 		RuntimeContext:          resources.NewRuntimeContextNative(),
 		ProposedNetworkMappings: networkMappings,
 	})
 	require.NoError(t, err)
 
 	defer func() {
-		_, _ = runtime.Stop(ctx, &runtimev0.StopRequest{})
-		_, _ = runtime.Destroy(ctx, &runtimev0.DestroyRequest{})
+		_, _ = runtime.Stop(ctx, &runtimev1.StopRequest{})
+		_, _ = runtime.Destroy(ctx, &runtimev1.DestroyRequest{})
 	}()
 
 	// 5. Start
-	_, err = runtime.Start(ctx, &runtimev0.StartRequest{})
+	_, err = runtime.Start(ctx, &runtimev1.StartRequest{})
 	require.NoError(t, err)
 
 	// 6. Verify HTTP endpoint

@@ -7,9 +7,9 @@ import (
 	"testing"
 
 	"github.com/codefly-dev/core/agents"
-	basev0 "github.com/codefly-dev/core/generated/go/codefly/base/v0"
-	codev0 "github.com/codefly-dev/core/generated/go/codefly/services/code/v0"
-	toolingv0 "github.com/codefly-dev/core/generated/go/codefly/services/tooling/v0"
+	basev1 "github.com/codefly-dev/core/generated/go/codefly/base/v1"
+	codev1 "github.com/codefly-dev/core/generated/go/codefly/services/code/v1"
+	toolingv1 "github.com/codefly-dev/core/generated/go/codefly/services/tooling/v1"
 	"github.com/codefly-dev/core/resources"
 )
 
@@ -35,8 +35,8 @@ func TestProjectInfoCarriesDeclaredDependenciesAndSourceImportsAcrossCodeAndTool
 	service := NewService()
 	service.sourceLocation = dir
 	server := NewCode(service)
-	codeResponse, err := server.Execute(context.Background(), &codev0.CodeRequest{
-		Operation: &codev0.CodeRequest_GetProjectInfo{GetProjectInfo: &codev0.GetProjectInfoRequest{}},
+	codeResponse, err := server.Execute(context.Background(), &codev1.CodeRequest{
+		Operation: &codev1.CodeRequest_GetProjectInfo{GetProjectInfo: &codev1.GetProjectInfoRequest{}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -46,7 +46,7 @@ func TestProjectInfoCarriesDeclaredDependenciesAndSourceImportsAcrossCodeAndTool
 		t.Fatalf("code project language = %q, want typescript", got)
 	}
 
-	toolingResponse, err := NewTooling(server, nil).GetProjectInfo(context.Background(), &toolingv0.GetProjectInfoRequest{})
+	toolingResponse, err := NewTooling(server, nil).GetProjectInfo(context.Background(), &toolingv1.GetProjectInfoRequest{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,11 +60,11 @@ func TestProjectInfoCarriesDeclaredDependenciesAndSourceImportsAcrossCodeAndTool
 		len(toolingResponse.GetSourceFiles()[0].GetImports()) != 1 || toolingResponse.GetSourceFiles()[0].GetImports()[0] != "express" {
 		t.Fatalf("tooling project info = %+v", toolingResponse)
 	}
-	semantic, err := NewTooling(server, nil).GetSemanticIndex(context.Background(), &toolingv0.GetSemanticIndexRequest{})
+	semantic, err := NewTooling(server, nil).GetSemanticIndex(context.Background(), &toolingv1.GetSemanticIndexRequest{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if semantic.GetFailure() != nil || semantic.GetIndex().GetState() != basev0.SemanticIndexState_SEMANTIC_INDEX_STATE_COMPLETE || len(semantic.GetIndex().GetFiles()) != 1 || len(semantic.GetIndex().GetSymbols()) == 0 {
+	if semantic.GetFailure() != nil || semantic.GetIndex().GetState() != basev1.SemanticIndexState_SEMANTIC_INDEX_STATE_COMPLETE || len(semantic.GetIndex().GetFiles()) != 1 || len(semantic.GetIndex().GetSymbols()) == 0 {
 		t.Fatalf("semantic index = %+v", semantic)
 	}
 }
@@ -94,8 +94,8 @@ func TestProjectInfoLoadsAttachedDeclarationBeforeRuntime(t *testing.T) {
 
 	service := NewService()
 	server := NewCode(service)
-	response, err := server.Execute(t.Context(), &codev0.CodeRequest{
-		Operation: &codev0.CodeRequest_GetProjectInfo{GetProjectInfo: &codev0.GetProjectInfoRequest{}},
+	response, err := server.Execute(t.Context(), &codev1.CodeRequest{
+		Operation: &codev1.CodeRequest_GetProjectInfo{GetProjectInfo: &codev1.GetProjectInfoRequest{}},
 	})
 	if err != nil {
 		t.Fatalf("pre-runtime project info: %v", err)
@@ -103,11 +103,11 @@ func TestProjectInfoLoadsAttachedDeclarationBeforeRuntime(t *testing.T) {
 	if got := response.GetGetProjectInfo().GetModule(); got != "preload-ui" {
 		t.Fatalf("module = %q, want attached project", got)
 	}
-	semantic, err := NewTooling(server, nil).GetSemanticIndex(t.Context(), &toolingv0.GetSemanticIndexRequest{})
+	semantic, err := NewTooling(server, nil).GetSemanticIndex(t.Context(), &toolingv1.GetSemanticIndexRequest{})
 	if err != nil {
 		t.Fatalf("pre-runtime semantic index: %v", err)
 	}
-	if semantic.GetFailure() != nil || semantic.GetIndex().GetState() != basev0.SemanticIndexState_SEMANTIC_INDEX_STATE_COMPLETE ||
+	if semantic.GetFailure() != nil || semantic.GetIndex().GetState() != basev1.SemanticIndexState_SEMANTIC_INDEX_STATE_COMPLETE ||
 		len(semantic.GetIndex().GetFiles()) != 1 || len(semantic.GetIndex().GetSymbols()) == 0 {
 		t.Fatalf("pre-runtime semantic index = %+v, want complete attached source", semantic)
 	}
@@ -132,8 +132,8 @@ func TestProjectInfoReportsJavaScriptForJavaScriptOnlyProject(t *testing.T) {
 	service := NewService()
 	service.sourceLocation = dir
 	server := NewCode(service)
-	codeResponse, err := server.Execute(context.Background(), &codev0.CodeRequest{
-		Operation: &codev0.CodeRequest_GetProjectInfo{GetProjectInfo: &codev0.GetProjectInfoRequest{}},
+	codeResponse, err := server.Execute(context.Background(), &codev1.CodeRequest{
+		Operation: &codev1.CodeRequest_GetProjectInfo{GetProjectInfo: &codev1.GetProjectInfoRequest{}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -142,7 +142,7 @@ func TestProjectInfoReportsJavaScriptForJavaScriptOnlyProject(t *testing.T) {
 		t.Fatalf("code project language = %q, want javascript", got)
 	}
 
-	toolingResponse, err := NewTooling(server, nil).GetProjectInfo(context.Background(), &toolingv0.GetProjectInfoRequest{})
+	toolingResponse, err := NewTooling(server, nil).GetProjectInfo(context.Background(), &toolingv1.GetProjectInfoRequest{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,7 +151,7 @@ func TestProjectInfoReportsJavaScriptForJavaScriptOnlyProject(t *testing.T) {
 	}
 }
 
-func assertNodeProjectInfo(t *testing.T, module string, dependencies []*codev0.Dependency, sourceFiles []*codev0.SourceFileInfo) {
+func assertNodeProjectInfo(t *testing.T, module string, dependencies []*codev1.Dependency, sourceFiles []*codev1.SourceFileInfo) {
 	t.Helper()
 	if module != "checkout-ui" || len(dependencies) != 1 || dependencies[0].GetName() != "express" ||
 		dependencies[0].GetVersion() != "^5.1.0" || !dependencies[0].GetDirect() {

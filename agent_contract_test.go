@@ -21,7 +21,7 @@ import (
 
 	"github.com/codefly-dev/core/agents"
 	"github.com/codefly-dev/core/agents/contract"
-	agentv0 "github.com/codefly-dev/core/generated/go/codefly/services/agent/v0"
+	agentv1 "github.com/codefly-dev/core/generated/go/codefly/services/agent/v1"
 	"github.com/codefly-dev/core/runners/recoveryscope"
 )
 
@@ -62,8 +62,8 @@ func TestBuiltAgentIsAdmittedOverAuthenticatedDiscovery(t *testing.T) {
 	defer cancel()
 	ctx = metadata.AppendToOutgoingContext(ctx, agents.AuthMetadataKey, "contract-test")
 	var headers metadata.MD
-	info, err := agentv0.NewAgentClient(conn).GetAgentInformation(
-		ctx, &agentv0.AgentInformationRequest{}, grpc.Header(&headers))
+	info, err := agentv1.NewAgentClient(conn).GetAgentInformation(
+		ctx, &agentv1.AgentInformationRequest{}, grpc.Header(&headers))
 	require.NoError(t, err, "agent stderr:\n%s", stderr.String())
 
 	require.NoError(t, contract.Check(info.GetContract(), contract.ContainerRecoveryScope))

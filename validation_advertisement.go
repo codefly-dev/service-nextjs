@@ -1,23 +1,23 @@
 package main
 
-import agentv0 "github.com/codefly-dev/core/generated/go/codefly/services/agent/v0"
+import agentv1 "github.com/codefly-dev/core/generated/go/codefly/services/agent/v1"
 
-func nextValidationCapabilities() *agentv0.ValidationCapabilities {
-	workspace := []agentv0.ValidationScope{agentv0.ValidationScope_VALIDATION_SCOPE_WORKSPACE}
-	return &agentv0.ValidationCapabilities{
-		Lint: &agentv0.ValidationOperationCapability{
+func nextValidationCapabilities() *agentv1.ValidationCapabilities {
+	workspace := []agentv1.ValidationScope{agentv1.ValidationScope_VALIDATION_SCOPE_WORKSPACE}
+	return &agentv1.ValidationCapabilities{
+		Lint: &agentv1.ValidationOperationCapability{
 			Supported: true,
-			Scopes: []agentv0.ValidationScope{
-				agentv0.ValidationScope_VALIDATION_SCOPE_WORKSPACE,
-				agentv0.ValidationScope_VALIDATION_SCOPE_PACKAGE,
-				agentv0.ValidationScope_VALIDATION_SCOPE_FILE,
+			Scopes: []agentv1.ValidationScope{
+				agentv1.ValidationScope_VALIDATION_SCOPE_WORKSPACE,
+				agentv1.ValidationScope_VALIDATION_SCOPE_PACKAGE,
+				agentv1.ValidationScope_VALIDATION_SCOPE_FILE,
 			},
 		},
 		Compile: validationOperation(workspace),
-		Test: &agentv0.TestValidationCapability{
+		Test: &agentv1.TestValidationCapability{
 			Supported: true,
 			Scopes:    workspace,
-			Suites: []*agentv0.TestSuiteCapability{
+			Suites: []*agentv1.TestSuiteCapability{
 				{
 					// A frontend's useful unit is its headless application
 					// capability, not an isolated React function. Start the
@@ -25,26 +25,26 @@ func nextValidationCapabilities() *agentv0.ValidationCapabilities {
 					// real service APIs, databases, queues, and fixtures with
 					// ordinary unit-test ergonomics.
 					Name:           "unit",
-					DependencyMode: agentv0.TestDependencyMode_TEST_DEPENDENCY_MODE_START_DEPENDENCIES,
+					DependencyMode: agentv1.TestDependencyMode_TEST_DEPENDENCY_MODE_START_DEPENDENCIES,
 					DefaultSuite:   true,
 				},
 				{
 					// Pure remains an explicit fast path for packages that
 					// genuinely have no runtime boundary.
 					Name:           "pure",
-					DependencyMode: agentv0.TestDependencyMode_TEST_DEPENDENCY_MODE_NONE,
+					DependencyMode: agentv1.TestDependencyMode_TEST_DEPENDENCY_MODE_NONE,
 				},
 				{
 					Name:           "integration",
-					DependencyMode: agentv0.TestDependencyMode_TEST_DEPENDENCY_MODE_START_DEPENDENCIES,
+					DependencyMode: agentv1.TestDependencyMode_TEST_DEPENDENCY_MODE_START_DEPENDENCIES,
 				},
 				{
 					Name:           "e2e",
-					DependencyMode: agentv0.TestDependencyMode_TEST_DEPENDENCY_MODE_START_DEPENDENCIES,
+					DependencyMode: agentv1.TestDependencyMode_TEST_DEPENDENCY_MODE_START_DEPENDENCIES,
 				},
 				{
 					Name:           "smoke",
-					DependencyMode: agentv0.TestDependencyMode_TEST_DEPENDENCY_MODE_START_STACK,
+					DependencyMode: agentv1.TestDependencyMode_TEST_DEPENDENCY_MODE_START_STACK,
 				},
 			},
 		},
@@ -55,6 +55,6 @@ func nextValidationCapabilities() *agentv0.ValidationCapabilities {
 	}
 }
 
-func validationOperation(scopes []agentv0.ValidationScope) *agentv0.ValidationOperationCapability {
-	return &agentv0.ValidationOperationCapability{Supported: true, Scopes: scopes}
+func validationOperation(scopes []agentv1.ValidationScope) *agentv1.ValidationOperationCapability {
+	return &agentv1.ValidationOperationCapability{Supported: true, Scopes: scopes}
 }

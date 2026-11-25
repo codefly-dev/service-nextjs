@@ -19,9 +19,9 @@ import (
 	"github.com/codefly-dev/core/agents/services/sbom"
 	"github.com/codefly-dev/core/agents/services/upgrade"
 	proto "github.com/codefly-dev/core/companions/proto"
-	v0 "github.com/codefly-dev/core/generated/go/codefly/base/v0"
-	agentv0 "github.com/codefly-dev/core/generated/go/codefly/services/agent/v0"
-	builderv0 "github.com/codefly-dev/core/generated/go/codefly/services/builder/v0"
+	basev1 "github.com/codefly-dev/core/generated/go/codefly/base/v1"
+	agentv1 "github.com/codefly-dev/core/generated/go/codefly/services/agent/v1"
+	builderv1 "github.com/codefly-dev/core/generated/go/codefly/services/builder/v1"
 	"github.com/codefly-dev/core/languages"
 	"github.com/codefly-dev/core/resources"
 	"github.com/codefly-dev/core/shared"
@@ -36,7 +36,7 @@ type Builder struct {
 	*services.DefaultBuilder
 	*Service
 
-	answers map[string]*agentv0.Answer
+	answers map[string]*agentv1.Answer
 
 	relativeToWorkspace string
 }
@@ -48,13 +48,13 @@ func NewBuilder(service *Service) *Builder {
 	}
 }
 
-func (s *Builder) Load(ctx context.Context, req *builderv0.LoadRequest) (*builderv0.LoadResponse, error) {
+func (s *Builder) Load(ctx context.Context, req *builderv1.LoadRequest) (*builderv1.LoadResponse, error) {
 	defer s.Wool.Catch()
 	response, err := s.Builder.LoadService(ctx, req, services.BuilderLoad{
 		Settings:         s.Settings,
 		Requirements:     requirements,
 		FactoryTemplates: factoryFS,
-		ResolveEndpoints: func(ctx context.Context, endpoints []*v0.Endpoint) error {
+		ResolveEndpoints: func(ctx context.Context, endpoints []*basev1.Endpoint) error {
 			endpoint, resolveErr := resources.FindHTTPEndpoint(ctx, endpoints)
 			if resolveErr != nil {
 				return resolveErr
@@ -88,7 +88,7 @@ func serviceWorkspaceRelative(workspaceRoot, serviceRoot, fallback string) strin
 	return filepath.ToSlash(filepath.Clean(fallback))
 }
 
-func (s *Builder) Init(ctx context.Context, req *builderv0.InitRequest) (*builderv0.InitResponse, error) {
+func (s *Builder) Init(ctx context.Context, req *builderv1.InitRequest) (*builderv1.InitResponse, error) {
 	defer s.Wool.Catch()
 
 	s.Builder.LogInitRequest(req)
@@ -98,7 +98,7 @@ func (s *Builder) Init(ctx context.Context, req *builderv0.InitRequest) (*builde
 	return s.Builder.InitResponse()
 }
 
-func (s *Builder) Sync(ctx context.Context, req *builderv0.SyncRequest) (*builderv0.SyncResponse, error) {
+func (s *Builder) Sync(ctx context.Context, req *builderv1.SyncRequest) (*builderv1.SyncResponse, error) {
 	defer s.Wool.Catch()
 	ctx = s.Wool.Inject(ctx)
 
@@ -167,7 +167,7 @@ func (s *Builder) Sync(ctx context.Context, req *builderv0.SyncRequest) (*builde
 	return response, nil
 }
 
-func syncDryRun(request *builderv0.SyncRequest) bool {
+func syncDryRun(request *builderv1.SyncRequest) bool {
 	if request == nil {
 		return false
 	}
@@ -176,7 +176,7 @@ func syncDryRun(request *builderv0.SyncRequest) bool {
 	return field != nil && message.Get(field).Bool()
 }
 
-func setSyncChangedFiles(response *builderv0.SyncResponse, changed []string) error {
+func setSyncChangedFiles(response *builderv1.SyncResponse, changed []string) error {
 	message := response.ProtoReflect()
 	field := message.Descriptor().Fields().ByName("changed_files")
 	if field == nil || !field.IsList() {
@@ -449,12 +449,12 @@ func (d DockerTemplating) InstallWorkdirs() []string {
 // is not visible to Docker dependency automation.
 const NodeImage = "node:24.22.1-alpine3.24@sha256:06d7adf3e0ef61a13f1d28682726366f97a15aa1888c934d3ecec86c33918b53"
 
-func (s *Builder) BuildCapabilities(context.Context, *builderv0.BuildCapabilitiesRequest) (*builderv0.BuildCapabilitiesResponse, error) {
+func (s *Builder) BuildCapabilities(context.Context, *builderv1.BuildCapabilitiesRequest) (*builderv1.BuildCapabilitiesResponse, error) {
 	// Recipe execution, including Buildx selection, belongs to the CLI.
-	return &builderv0.BuildCapabilitiesResponse{BuildxSelection: true}, nil
+	return &builderv1.BuildCapabilitiesResponse{BuildxSelection: true}, nil
 }
 
-func (s *Builder) Build(ctx context.Context, req *builderv0.BuildRequest) (*builderv0.BuildResponse, error) {
+func (s *Builder) Build(ctx context.Context, req *builderv1.BuildRequest) (*builderv1.BuildResponse, error) {
 	if req.GetOutputDirectory() == "" {
 		return nil, status.Error(codes.InvalidArgument, "output_directory is required: the CLI executes the Docker build recipe")
 	}
@@ -489,7 +489,7 @@ func (s *Builder) Build(ctx context.Context, req *builderv0.BuildRequest) (*buil
 }
 
 // Assemble admitted inputs without removing caller-owned output files.
-func (s *Builder) buildRecipe(ctx context.Context, docker DockerTemplating, image *resources.DockerImage, output string) (*builderv0.BuildResponse, error) {
+func (s *Builder) buildRecipe(ctx context.Context, docker DockerTemplating, image *resources.DockerImage, output string) (*builderv1.BuildResponse, error) {
 	inputs, app, err := stageBuildInputs(ctx, s.Local("%s", docker.SourceDir), s.Location, output)
 	if err != nil {
 		return s.Builder.BuildError(err)
@@ -506,17 +506,17 @@ func (s *Builder) buildRecipe(ctx context.Context, docker DockerTemplating, imag
 		return s.Builder.BuildError(err)
 	}
 
-	recipe := &builderv0.DockerBuildRecipe{
+	recipe := &builderv1.DockerBuildRecipe{
 		Name:         filepath.Base(image.Name),
 		Dockerfile:   "Dockerfile",
 		Context:      "context",
-		ContextRoot:  builderv0.RecipeContextRoot_RECIPE_CONTEXT_ROOT_OUTPUT,
+		ContextRoot:  builderv1.RecipeContextRoot_RECIPE_CONTEXT_ROOT_OUTPUT,
 		Dockerignore: "dockerignore",
 		Image:        image.FullName(),
 		Platforms:    []string{"linux/amd64", "linux/arm64"},
 		BuildArgs:    s.Settings.BuildArgs,
 	}
-	plan, err := services.BuildDockerBuildPlan(output, []*builderv0.DockerBuildRecipe{recipe})
+	plan, err := services.BuildDockerBuildPlan(output, []*builderv1.DockerBuildRecipe{recipe})
 	if err != nil {
 		return s.Builder.BuildError(err)
 	}
@@ -527,7 +527,7 @@ func (s *Builder) buildRecipe(ctx context.Context, docker DockerTemplating, imag
 // Audit scans the Next.js project for vulnerabilities (npm audit) and
 // optionally reports outdated packages (npm outdated). Runs at the node
 // source root (s.Settings.NodeSourceDir()).
-func (s *Builder) Audit(ctx context.Context, req *builderv0.AuditRequest) (*builderv0.AuditResponse, error) {
+func (s *Builder) Audit(ctx context.Context, req *builderv1.AuditRequest) (*builderv1.AuditResponse, error) {
 	defer s.Wool.Catch()
 	ctx = s.Wool.Inject(ctx)
 	dir := s.Local("%s", s.Settings.NodeSourceDir())
@@ -538,7 +538,7 @@ func (s *Builder) Audit(ctx context.Context, req *builderv0.AuditRequest) (*buil
 	return s.Builder.AuditResponse(req, res.Findings, res.Outdated, res.Tool, res.Language)
 }
 
-func nodeAuditOptions(req *builderv0.AuditRequest) audit.NodeOptions {
+func nodeAuditOptions(req *builderv1.AuditRequest) audit.NodeOptions {
 	if req == nil {
 		return audit.NodeOptions{}
 	}
@@ -552,13 +552,13 @@ func nodeAuditOptions(req *builderv0.AuditRequest) audit.NodeOptions {
 // lifecycle scripts. The lockfile, not ambient node_modules, is authoritative.
 // Image scope is served from subjects the caller resolved after executing the
 // emitted recipe: buildx belongs to the CLI, so the digest exists only there.
-func (s *Builder) SBOM(ctx context.Context, req *builderv0.SBOMRequest) (*builderv0.SBOMResponse, error) {
+func (s *Builder) SBOM(ctx context.Context, req *builderv1.SBOMRequest) (*builderv1.SBOMResponse, error) {
 	defer s.Wool.Catch()
 	ctx = s.Wool.Inject(ctx)
 	switch req.GetScope() {
-	case builderv0.SBOMScope_SBOM_SCOPE_IMAGE:
+	case builderv1.SBOMScope_SBOM_SCOPE_IMAGE:
 		return s.imageSBOM(ctx, req.GetSubjects())
-	case builderv0.SBOMScope_SBOM_SCOPE_UNSPECIFIED, builderv0.SBOMScope_SBOM_SCOPE_SOURCE:
+	case builderv1.SBOMScope_SBOM_SCOPE_UNSPECIFIED, builderv1.SBOMScope_SBOM_SCOPE_SOURCE:
 		// The source inventory below answers both.
 	default:
 		return s.Builder.SBOMUnsupported(fmt.Sprintf("unsupported SBOM scope %s", req.GetScope()))
@@ -575,7 +575,7 @@ func (s *Builder) SBOM(ctx context.Context, req *builderv0.SBOMRequest) (*builde
 // repushed between the build that produced it and this scan, so evidence bound
 // to whatever it resolves to now would describe an image that was never
 // shipped, while still reporting complete coverage.
-func (s *Builder) imageSBOM(ctx context.Context, subjects []*builderv0.ImageSubject) (*builderv0.SBOMResponse, error) {
+func (s *Builder) imageSBOM(ctx context.Context, subjects []*builderv1.ImageSubject) (*builderv1.SBOMResponse, error) {
 	for _, subject := range subjects {
 		if subject.GetDigest() == "" && !strings.Contains(subject.GetReference(), "@") {
 			return s.Builder.SBOMImageSubjectsRequired()
@@ -586,7 +586,7 @@ func (s *Builder) imageSBOM(ctx context.Context, subjects []*builderv0.ImageSubj
 
 // Upgrade bumps npm dependencies in package.json (npm update by default,
 // npm install <pkg>@latest for --major). --dry-run skips the write.
-func (s *Builder) Upgrade(ctx context.Context, req *builderv0.UpgradeRequest) (*builderv0.UpgradeResponse, error) {
+func (s *Builder) Upgrade(ctx context.Context, req *builderv1.UpgradeRequest) (*builderv1.UpgradeResponse, error) {
 	defer s.Wool.Catch()
 	ctx = s.Wool.Inject(ctx)
 	dir := s.Local("%s", s.Settings.NodeSourceDir())
@@ -601,7 +601,7 @@ func (s *Builder) Upgrade(ctx context.Context, req *builderv0.UpgradeRequest) (*
 	return s.Builder.UpgradeResponse(res.Changes, res.LockfileDiff)
 }
 
-func (s *Builder) Deploy(ctx context.Context, req *builderv0.DeploymentRequest) (*builderv0.DeploymentResponse, error) {
+func (s *Builder) Deploy(ctx context.Context, req *builderv1.DeploymentRequest) (*builderv1.DeploymentResponse, error) {
 	defer s.Wool.Catch()
 	ctx = s.Wool.Inject(ctx)
 
@@ -659,7 +659,7 @@ type servicePort struct {
 // When the request carries no container mapping for this service's endpoints
 // (a render with no network input), the Service keeps publishing the container
 // port so that render is unchanged.
-func (s *Builder) servicePorts(ctx context.Context, mappings []*v0.NetworkMapping) ([]servicePort, error) {
+func (s *Builder) servicePorts(ctx context.Context, mappings []*basev1.NetworkMapping) ([]servicePort, error) {
 	var ports []servicePort
 	if s.HttpEndpoint != nil {
 		for _, mapping := range mappings {
@@ -726,7 +726,7 @@ func (s *Builder) podOverlay() *services.PodTemplateOverlay {
 	return &services.PodTemplateOverlay{ConfigMounts: mounts}
 }
 
-func (s *Builder) Options() []*agentv0.Question {
+func (s *Builder) Options() []*agentv1.Question {
 	// Only present these questions during Create. Sync / Update / Build
 	// load settings from service.codefly.yaml — re-prompting there would
 	// block non-interactive CLI flows (codefly sync, CI, MCP) on an
@@ -734,20 +734,20 @@ func (s *Builder) Options() []*agentv0.Question {
 	if s.Builder.CreationMode == nil {
 		return nil
 	}
-	return []*agentv0.Question{
+	return []*agentv1.Question{
 		communicate.NewChoiceWithDefault(
-			&agentv0.Message{Name: Mode, Message: "Deployment mode?", Description: "SSR runs a Node.js server (dynamic apps, auth, API routes). Static exports plain HTML/CSS/JS (corporate sites, docs)."},
+			&agentv1.Message{Name: Mode, Message: "Deployment mode?", Description: "SSR runs a Node.js server (dynamic apps, auth, API routes). Static exports plain HTML/CSS/JS (corporate sites, docs)."},
 			"ssr",
-			&agentv0.Message{Name: "ssr", Message: "SSR (Server-Side Rendering)", Description: "Node.js server with server components, API routes, middleware"},
-			&agentv0.Message{Name: "static", Message: "Static Export", Description: "Plain HTML/CSS/JS served from CDN or nginx"},
+			&agentv1.Message{Name: "ssr", Message: "SSR (Server-Side Rendering)", Description: "Node.js server with server components, API routes, middleware"},
+			&agentv1.Message{Name: "static", Message: "Static Export", Description: "Plain HTML/CSS/JS served from CDN or nginx"},
 		),
 		communicate.NewChoiceWithDefault(
-			&agentv0.Message{Name: AuthProviderOption, Message: "Auth provider?", Description: "Choose an authentication provider. WorkOS provides hosted login UI, SSO, and user management via AuthKit."},
+			&agentv1.Message{Name: AuthProviderOption, Message: "Auth provider?", Description: "Choose an authentication provider. WorkOS provides hosted login UI, SSO, and user management via AuthKit."},
 			"none",
-			&agentv0.Message{Name: "none", Message: "None (placeholder)", Description: "Scaffold placeholder auth — replace later with your provider of choice"},
-			&agentv0.Message{Name: "workos", Message: "WorkOS AuthKit", Description: "Production-ready auth with SSO, social login, and hosted UI via WorkOS"},
+			&agentv1.Message{Name: "none", Message: "None (placeholder)", Description: "Scaffold placeholder auth — replace later with your provider of choice"},
+			&agentv1.Message{Name: "workos", Message: "WorkOS AuthKit", Description: "Production-ready auth with SSO, social login, and hosted UI via WorkOS"},
 		),
-		communicate.NewConfirm(&agentv0.Message{Name: HotReload, Message: "Code hot-reload (Recommended)?", Description: "codefly can restart your service when code changes are detected"}, true),
+		communicate.NewConfirm(&agentv1.Message{Name: HotReload, Message: "Code hot-reload (Recommended)?", Description: "codefly can restart your service when code changes are detected"}, true),
 	}
 }
 
@@ -756,7 +756,7 @@ type CreateConfiguration struct {
 	WorkOS bool
 }
 
-func (s *Builder) Create(ctx context.Context, req *builderv0.CreateRequest) (*builderv0.CreateResponse, error) {
+func (s *Builder) Create(ctx context.Context, req *builderv1.CreateRequest) (*builderv1.CreateResponse, error) {
 	defer s.Wool.Catch()
 	ctx = s.Wool.Inject(ctx)
 
@@ -850,11 +850,11 @@ func (s *Builder) CreateEndpoints(ctx context.Context) error {
 	if err != nil {
 		return s.Wool.Wrapf(err, "cannot create http endpoint")
 	}
-	s.Endpoints = []*v0.Endpoint{s.HttpEndpoint}
+	s.Endpoints = []*basev1.Endpoint{s.HttpEndpoint}
 	return nil
 }
 
-func (s *Builder) Communicate(stream builderv0.Builder_CommunicateServer) error {
+func (s *Builder) Communicate(stream builderv1.Builder_CommunicateServer) error {
 	asker := communicate.NewQuestionAsker(stream)
 	answers, err := asker.RunSequence(s.Options())
 	if err != nil {

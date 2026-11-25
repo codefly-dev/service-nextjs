@@ -10,8 +10,8 @@ import (
 	"testing"
 
 	"github.com/codefly-dev/core/agents/contract"
-	basev0 "github.com/codefly-dev/core/generated/go/codefly/base/v0"
-	runtimev0 "github.com/codefly-dev/core/generated/go/codefly/services/runtime/v0"
+	basev1 "github.com/codefly-dev/core/generated/go/codefly/base/v1"
+	runtimev1 "github.com/codefly-dev/core/generated/go/codefly/services/runtime/v1"
 	"github.com/codefly-dev/core/network"
 	"github.com/codefly-dev/core/resources"
 	"github.com/stretchr/testify/require"
@@ -23,28 +23,28 @@ func TestDependencyOnlyTestReceivesAcceptedAddressAtInit(t *testing.T) {
 		_, _ = w.Write([]byte("accepted dependency"))
 	}))
 	t.Cleanup(dependency.Close)
-	endpoint := &basev0.Endpoint{Module: "mod", Service: "api", Name: "http", Api: "http"}
-	mapping := &basev0.NetworkMapping{Endpoint: endpoint, Instances: []*basev0.NetworkInstance{
+	endpoint := &basev1.Endpoint{Module: "mod", Service: "api", Name: "http", Api: "http"}
+	mapping := &basev1.NetworkMapping{Endpoint: endpoint, Instances: []*basev1.NetworkInstance{
 		network.Native(endpoint, uint16(dependency.Listener.Addr().(*net.TCPAddr).Port)),
 	}}
 	runtime := dependencyTestRuntime(t)
 	info, err := runtime.GetAgentInformation(ctx, nil)
 	require.NoError(t, err)
 	require.Contains(t, info.GetContract().GetCapabilities(), contract.RuntimeInitDependencyMappings)
-	response, err := runtime.Init(ctx, &runtimev0.InitRequest{
+	response, err := runtime.Init(ctx, &runtimev1.InitRequest{
 		RuntimeContext:              resources.NewRuntimeContextNative(),
-		DependenciesEndpoints:       []*basev0.Endpoint{endpoint},
-		DependenciesNetworkMappings: []*basev0.NetworkMapping{mapping},
+		DependenciesEndpoints:       []*basev1.Endpoint{endpoint},
+		DependenciesNetworkMappings: []*basev1.NetworkMapping{mapping},
 		Fixture:                     "dev-admin", Overrides: map[string]string{"TEST_INVOCATION_INPUT": "from-init"},
 	})
 	require.NoError(t, err)
-	require.Equal(t, runtimev0.InitStatus_READY, response.GetStatus().GetState(), response.GetStatus().GetMessage())
-	result, err := runtime.Test(ctx, &runtimev0.TestRequest{Suite: "unit"})
+	require.Equal(t, runtimev1.InitStatus_READY, response.GetStatus().GetState(), response.GetStatus().GetMessage())
+	result, err := runtime.Test(ctx, &runtimev1.TestRequest{Suite: "unit"})
 	require.NoError(t, err)
-	require.Equal(t, runtimev0.TestRunResult_PASSED, result.GetResult().GetState(), result.String())
+	require.Equal(t, runtimev1.TestRunResult_PASSED, result.GetResult().GetState(), result.String())
 	require.EqualValues(t, 1, result.GetCounts().GetPassed())
 	// A previous Start must not leave two values for the same endpoint key.
-	require.NoError(t, runtime.EnvironmentVariables.AddEndpoints(ctx, []*basev0.NetworkMapping{mapping}, resources.NewNativeNetworkAccess()))
+	require.NoError(t, runtime.EnvironmentVariables.AddEndpoints(ctx, []*basev1.NetworkMapping{mapping}, resources.NewNativeNetworkAccess()))
 	variables, err := runtime.testEnvironment(ctx, "unit")
 	require.NoError(t, err)
 	key := resources.EndpointAsEnvironmentVariableKey(resources.EndpointInformationFromProto(endpoint))
@@ -63,22 +63,22 @@ func TestDependencyTestRejectsMissingContextBeforeInstalling(t *testing.T) {
 		t.Run(missing, func(t *testing.T) {
 			ctx := context.Background()
 			runtime := dependencyTestRuntime(t)
-			endpoint := &basev0.Endpoint{Module: "mod", Service: "api", Name: "http", Api: "http"}
-			request := &runtimev0.InitRequest{RuntimeContext: resources.NewRuntimeContextNative()}
+			endpoint := &basev1.Endpoint{Module: "mod", Service: "api", Name: "http", Api: "http"}
+			request := &runtimev1.InitRequest{RuntimeContext: resources.NewRuntimeContextNative()}
 			if missing != "logical endpoint" {
-				request.DependenciesEndpoints = []*basev0.Endpoint{endpoint}
+				request.DependenciesEndpoints = []*basev1.Endpoint{endpoint}
 			}
 			if missing == "native instance" {
-				request.DependenciesNetworkMappings = []*basev0.NetworkMapping{{Endpoint: endpoint}}
+				request.DependenciesNetworkMappings = []*basev1.NetworkMapping{{Endpoint: endpoint}}
 			}
 			response, err := runtime.Init(ctx, request)
 			require.NoError(t, err)
-			require.Equal(t, runtimev0.InitStatus_READY, response.GetStatus().GetState())
+			require.Equal(t, runtimev1.InitStatus_READY, response.GetStatus().GetState())
 			_, err = runtime.testEnvironment(ctx, "pure")
 			require.NoError(t, err, "pure tests deliberately request no runtime dependencies")
-			result, err := runtime.Test(ctx, &runtimev0.TestRequest{Suite: "unit"})
+			result, err := runtime.Test(ctx, &runtimev1.TestRequest{Suite: "unit"})
 			require.NoError(t, err)
-			require.Equal(t, runtimev0.TestStatus_ERROR, result.GetStatus().GetState())
+			require.Equal(t, runtimev1.TestStatus_ERROR, result.GetStatus().GetState())
 			require.Contains(t, result.GetStatus().GetMessage(), "test dependency")
 			_, err = os.Stat(filepath.Join(runtime.sourceLocation, "package-lock.json"))
 			require.ErrorIs(t, err, os.ErrNotExist)
@@ -113,10 +113,10 @@ func dependencyTestRuntime(t *testing.T) *Runtime {
 	runtime := NewRuntime(NewService())
 	env, err := environment.Proto()
 	require.NoError(t, err)
-	_, err = runtime.Load(ctx, &runtimev0.LoadRequest{Identity: identity, Environment: env, DisableCatch: true})
+	_, err = runtime.Load(ctx, &runtimev1.LoadRequest{Identity: identity, Environment: env, DisableCatch: true})
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		_, err := runtime.Destroy(ctx, &runtimev0.DestroyRequest{})
+		_, err := runtime.Destroy(ctx, &runtimev1.DestroyRequest{})
 		require.NoError(t, err)
 	})
 	return runtime

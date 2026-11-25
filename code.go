@@ -14,8 +14,8 @@ import (
 	"github.com/codefly-dev/core/agents"
 	corecode "github.com/codefly-dev/core/code"
 	"github.com/codefly-dev/core/code/semantic"
-	basev0 "github.com/codefly-dev/core/generated/go/codefly/base/v0"
-	codev0 "github.com/codefly-dev/core/generated/go/codefly/services/code/v0"
+	basev1 "github.com/codefly-dev/core/generated/go/codefly/base/v1"
+	codev1 "github.com/codefly-dev/core/generated/go/codefly/services/code/v1"
 	runners "github.com/codefly-dev/core/runners/base"
 )
 
@@ -73,7 +73,7 @@ func (c *Code) initServer() {
 	}
 }
 
-func (c *Code) Execute(ctx context.Context, req *codev0.CodeRequest) (*codev0.CodeResponse, error) {
+func (c *Code) Execute(ctx context.Context, req *codev1.CodeRequest) (*codev1.CodeResponse, error) {
 	c.serverMu.Lock()
 	defer c.serverMu.Unlock()
 	if _, err := c.resolveSourceLocation(ctx); err != nil {
@@ -94,7 +94,7 @@ func (c *Code) Execute(ctx context.Context, req *codev0.CodeRequest) (*codev0.Co
 // and reports JavaScript when the project contains only JavaScript sources.
 // ARCHITECTURE: Core owns source discovery; this agent classifies the returned
 // typed inventory instead of performing a second filesystem walk.
-func nodeProjectLanguage(sourceFiles []*codev0.SourceFileInfo) string {
+func nodeProjectLanguage(sourceFiles []*codev1.SourceFileInfo) string {
 	hasJavaScript := false
 	for _, source := range sourceFiles {
 		switch strings.ToLower(filepath.Ext(source.GetPath())) {
@@ -154,7 +154,7 @@ func (c *Code) fixTypeScript(ctx context.Context, input corecode.FixInput) (core
 
 	if manifest.hasDependency("@biomejs/biome") {
 		args := []string{"exec", "--offline", "--", "biome", "check", "--stdin-file-path", input.Path, "--write"}
-		if input.Mode == basev0.FixMode_FIX_MODE_AGGRESSIVE {
+		if input.Mode == basev1.FixMode_FIX_MODE_AGGRESSIVE {
 			args = append(args, "--unsafe")
 		}
 		fixed, diagnostics, runErr := runners.RunInput(ctx, env, c.sourceDir(), input.Content, "npm", args...)
@@ -410,7 +410,7 @@ func eslintSeverity(value int) string {
 }
 
 func (c *Code) runnerEnvironment(ctx context.Context) runners.RunnerEnvironment {
-	var runtimeContext *basev0.RuntimeContext
+	var runtimeContext *basev1.RuntimeContext
 	if c.Service.Base != nil && c.Service.Base.Runtime != nil {
 		runtimeContext = c.Service.Base.Runtime.RuntimeContext
 	}

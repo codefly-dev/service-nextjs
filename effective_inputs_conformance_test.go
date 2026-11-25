@@ -12,7 +12,7 @@ import (
 	"testing"
 
 	"github.com/codefly-dev/core/ciinputs"
-	agentv0 "github.com/codefly-dev/core/generated/go/codefly/services/agent/v0"
+	agentv1 "github.com/codefly-dev/core/generated/go/codefly/services/agent/v1"
 	"github.com/codefly-dev/core/resources"
 	"github.com/stretchr/testify/require"
 )
@@ -67,10 +67,10 @@ func TestEffectiveInputsNativeNextAndVitest(t *testing.T) {
 	require.False(t, native.Incomplete["TASK_PHASE_COMPILE"])
 	run("npm", "test", "--", "--maxWorkers=1")
 	run("npm", "run", "build", "--", "--webpack")
-	req := &agentv0.GetEffectiveInputsRequest{SchemaVersion: 1, Snapshot: "native"}
+	req := &agentv1.GetEffectiveInputsRequest{SchemaVersion: 1, Snapshot: "native"}
 	response, err := client.GetEffectiveInputs(context.Background(), req)
 	require.NoError(t, err)
-	artifact := inputTask(t, response, agentv0.TaskPhase_TASK_PHASE_ARTIFACT_BUILD, "")
+	artifact := inputTask(t, response, agentv1.TaskPhase_TASK_PHASE_ARTIFACT_BUILD, "")
 	require.True(t, pathInput(t, artifact, "code/production.test.js").Sensitive)
 	for _, in := range artifact.Inputs {
 		require.NotEqual(t, "code/checks/value.spec.js", in.Name)
@@ -92,13 +92,13 @@ func TestEffectiveInputsNativeNextAndVitest(t *testing.T) {
 	inputWrite(t, root, "code/next.config.js", `const fs=require('node:fs');fs.writeFileSync('../outside.txt','bad');fs.writeFileSync('fixture.txt','after');module.exports={}`)
 	before, err := os.ReadFile(filepath.Join(source, "fixture.txt"))
 	require.NoError(t, err)
-	response, err = client.GetEffectiveInputs(context.Background(), &agentv0.GetEffectiveInputsRequest{SchemaVersion: 1, Snapshot: "hostile-config"})
+	response, err = client.GetEffectiveInputs(context.Background(), &agentv1.GetEffectiveInputsRequest{SchemaVersion: 1, Snapshot: "hostile-config"})
 	require.NoError(t, err)
 	after, err := os.ReadFile(filepath.Join(source, "fixture.txt"))
 	require.NoError(t, err)
 	require.Equal(t, before, after)
 	require.NoFileExists(t, filepath.Join(root, "outside.txt"))
-	for _, in := range inputTask(t, response, agentv0.TaskPhase_TASK_PHASE_ARTIFACT_BUILD, "").Inputs {
+	for _, in := range inputTask(t, response, agentv1.TaskPhase_TASK_PHASE_ARTIFACT_BUILD, "").Inputs {
 		require.NotEqual(t, "code/fixture.txt", in.Name)
 	}
 
@@ -121,7 +121,7 @@ func TestEffectiveInputsNativeNextAndVitest(t *testing.T) {
 	paths := native.Tasks["TASK_PHASE_ARTIFACT_BUILD"]
 	require.NotEmpty(t, paths, "truncation must keep a prefix, not discard the observation")
 	require.LessOrEqual(t, len(paths), nativePathBudget)
-	response, err = client.GetEffectiveInputs(context.Background(), &agentv0.GetEffectiveInputsRequest{SchemaVersion: 1, Snapshot: "wide"})
+	response, err = client.GetEffectiveInputs(context.Background(), &agentv1.GetEffectiveInputsRequest{SchemaVersion: 1, Snapshot: "wide"})
 	require.NoError(t, err)
-	require.True(t, hasMarker(inputTask(t, response, agentv0.TaskPhase_TASK_PHASE_ARTIFACT_BUILD, ""), markerObservationIncomplete))
+	require.True(t, hasMarker(inputTask(t, response, agentv1.TaskPhase_TASK_PHASE_ARTIFACT_BUILD, ""), markerObservationIncomplete))
 }

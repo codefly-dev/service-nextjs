@@ -17,7 +17,7 @@ import (
 	"time"
 
 	"github.com/codefly-dev/core/agents/manager"
-	runtimev0 "github.com/codefly-dev/core/generated/go/codefly/services/runtime/v0"
+	runtimev1 "github.com/codefly-dev/core/generated/go/codefly/services/runtime/v1"
 	"github.com/codefly-dev/core/network"
 	"github.com/codefly-dev/core/resources"
 	runners "github.com/codefly-dev/core/runners/base"
@@ -71,8 +71,8 @@ func TestNativeAgentOwnershipLifecycle(t *testing.T) {
 	assertNativeOwnership(t, ctx, b.group, b.workspace, true)
 
 	// Ordinary Runtime.Stop must retire A without affecting B's exact birth.
-	stopped, err := a.client.Stop(ctx, &runtimev0.StopRequest{})
-	if err != nil || stopped.GetStatus().GetState() != runtimev0.StopStatus_SUCCESS {
+	stopped, err := a.client.Stop(ctx, &runtimev1.StopRequest{})
+	if err != nil || stopped.GetStatus().GetState() != runtimev1.StopStatus_SUCCESS {
 		t.Fatalf("ordinary stop: %v, %v", stopped, err)
 	}
 	waitNativeCondition(t, func() bool { return !a.group.Alive() })
@@ -134,8 +134,8 @@ func TestNativeAgentOwnershipLifecycle(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, b.owner, siblingOwner, "sibling's original agent birth changed")
 	t.Logf("recovery result: %s; sibling preserved", result)
-	stopped, err = b.client.Stop(ctx, &runtimev0.StopRequest{})
-	if err != nil || stopped.GetStatus().GetState() != runtimev0.StopStatus_SUCCESS {
+	stopped, err = b.client.Stop(ctx, &runtimev1.StopRequest{})
+	if err != nil || stopped.GetStatus().GetState() != runtimev1.StopStatus_SUCCESS {
 		t.Fatalf("sibling ordinary stop: %v, %v", stopped, err)
 	}
 	waitNativeCondition(t, func() bool { return !b.group.Alive() })
@@ -148,7 +148,7 @@ type ownedNativeService struct {
 	address   string
 	conn      *manager.AgentConn
 	owner     runners.ProcessIdentity
-	client    runtimev0.RuntimeClient
+	client    runtimev1.RuntimeClient
 	group     *runners.TrackedProcessGroup
 }
 
@@ -197,16 +197,16 @@ func startOwnedNativeService(t *testing.T, ctx context.Context) *ownedNativeServ
 	require.Equal(t, workspace, ownerObservation.LaunchWorkspace)
 	require.Contains(t, ownerObservation.Members, owner)
 	t.Logf("authenticated original agent launch %+v", owner)
-	client := runtimev0.NewRuntimeClient(conn.GRPCConn())
+	client := runtimev1.NewRuntimeClient(conn.GRPCConn())
 	t.Cleanup(func() {
 		cleanup, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		_, _ = client.Stop(cleanup, &runtimev0.StopRequest{})
+		_, _ = client.Stop(cleanup, &runtimev1.StopRequest{})
 	})
 	environmentProto, err := environment.Proto()
 	require.NoError(t, err)
-	loaded, err := client.Load(ctx, &runtimev0.LoadRequest{Identity: identity, Environment: environmentProto, DisableCatch: true})
-	if err != nil || loaded.GetStatus().GetState() != runtimev0.LoadStatus_READY {
+	loaded, err := client.Load(ctx, &runtimev1.LoadRequest{Identity: identity, Environment: environmentProto, DisableCatch: true})
+	if err != nil || loaded.GetStatus().GetState() != runtimev1.LoadStatus_READY {
 		t.Fatalf("load: %v, %v\n%s", loaded, err, conn.StderrTail())
 	}
 	composition, err := resources.LoadWorkspaceFromDir(ctx, workspace)
@@ -220,8 +220,8 @@ func startOwnedNativeService(t *testing.T, ctx context.Context) *ownedNativeServ
 	require.NoError(t, err)
 	instance, err := resources.FindNetworkInstanceInNetworkMappings(ctx, mappings, endpoint, resources.NewNativeNetworkAccess())
 	require.NoError(t, err)
-	initialized, err := client.Init(ctx, &runtimev0.InitRequest{RuntimeContext: resources.NewRuntimeContextNative(), ProposedNetworkMappings: mappings})
-	if err != nil || initialized.GetStatus().GetState() != runtimev0.InitStatus_READY {
+	initialized, err := client.Init(ctx, &runtimev1.InitRequest{RuntimeContext: resources.NewRuntimeContextNative(), ProposedNetworkMappings: mappings})
+	if err != nil || initialized.GetStatus().GetState() != runtimev1.InitStatus_READY {
 		t.Fatalf("init: %v, %v\n%s", initialized, err, conn.StderrTail())
 	}
 	return &ownedNativeService{workspace: workspace, address: instance.Address, conn: conn, owner: owner, client: client,
@@ -299,13 +299,13 @@ func TestNativeOwnerSignalRejectsStaleBirth(t *testing.T) {
 	require.Equal(t, original, current, "original process must survive stale-owner refusal unchanged")
 }
 
-func startNativeWorkload(t *testing.T, ctx context.Context, client runtimev0.RuntimeClient, workspace, address string) *runners.TrackedProcessGroup {
+func startNativeWorkload(t *testing.T, ctx context.Context, client runtimev1.RuntimeClient, workspace, address string) *runners.TrackedProcessGroup {
 	t.Helper()
 	// Returning from (and cancelling) Start's RPC must not end the workload.
 	startCtx, cancel := context.WithCancel(ctx)
-	started, err := client.Start(startCtx, &runtimev0.StartRequest{})
+	started, err := client.Start(startCtx, &runtimev1.StartRequest{})
 	cancel()
-	if err != nil || started.GetStatus().GetState() != runtimev0.StartStatus_STARTED {
+	if err != nil || started.GetStatus().GetState() != runtimev1.StartStatus_STARTED {
 		t.Fatalf("start: %v, %v", started, err)
 	}
 	httpClient := &http.Client{Timeout: 10 * time.Second}

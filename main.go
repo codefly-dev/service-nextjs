@@ -17,8 +17,8 @@ import (
 	"github.com/codefly-dev/core/agents/contract"
 	"github.com/codefly-dev/core/agents/services"
 	"github.com/codefly-dev/core/builders"
-	basev0 "github.com/codefly-dev/core/generated/go/codefly/base/v0"
-	agentv0 "github.com/codefly-dev/core/generated/go/codefly/services/agent/v0"
+	basev1 "github.com/codefly-dev/core/generated/go/codefly/base/v1"
+	agentv1 "github.com/codefly-dev/core/generated/go/codefly/services/agent/v1"
 	"github.com/codefly-dev/core/languages"
 	"github.com/codefly-dev/core/resources"
 	runnersbase "github.com/codefly-dev/core/runners/base"
@@ -235,7 +235,7 @@ type Service struct {
 	*services.Base
 
 	// Endpoints
-	HttpEndpoint *basev0.Endpoint
+	HttpEndpoint *basev1.Endpoint
 
 	// Settings
 	*Settings
@@ -276,7 +276,7 @@ func (s *Service) setSourceLocation(location string) {
 	s.sourceLocation = location
 }
 
-func (s *Service) GetAgentInformation(ctx context.Context, _ *agentv0.AgentInformationRequest) (*agentv0.AgentInformation, error) {
+func (s *Service) GetAgentInformation(ctx context.Context, _ *agentv1.AgentInformationRequest) (*agentv1.AgentInformation, error) {
 
 	info := s.Information
 	if info == nil {
@@ -293,18 +293,18 @@ func (s *Service) GetAgentInformation(ctx context.Context, _ *agentv0.AgentInfor
 			Nix:    true,
 			Docker: true,
 		},
-		Toolchains: []agentv0.Toolchain_Type{agentv0.Toolchain_NPM},
+		Toolchains: []agentv1.Toolchain_Type{agentv1.Toolchain_NPM},
 		HotReload:  true,
-		Languages: []agentv0.Language_Type{
-			agentv0.Language_TYPESCRIPT,
-			agentv0.Language_JAVASCRIPT,
+		Languages: []agentv1.Language_Type{
+			agentv1.Language_TYPESCRIPT,
+			agentv1.Language_JAVASCRIPT,
 		},
-		Protocols:               []agentv0.Protocol_Type{agentv0.Protocol_HTTP},
+		Protocols:               []agentv1.Protocol_Type{agentv1.Protocol_HTTP},
 		ReadMe:                  readme,
 		Validation:              nextValidationCapabilities(),
 		EffectiveInputsVersions: []uint32{1},
 	}.Build()
-	advertisement.Contract = &agentv0.AgentContract{
+	advertisement.Contract = &agentv1.AgentContract{
 		ProtocolVersion: lifecycleProtocolVersion,
 		// The stdout handshake is written by the linked SDK's Serve, so the
 		// format this binary speaks is whatever that release emits — reading

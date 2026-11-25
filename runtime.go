@@ -18,8 +18,8 @@ import (
 	"sync"
 	"time"
 
-	basev0 "github.com/codefly-dev/core/generated/go/codefly/base/v0"
-	agentv0 "github.com/codefly-dev/core/generated/go/codefly/services/agent/v0"
+	basev1 "github.com/codefly-dev/core/generated/go/codefly/base/v1"
+	agentv1 "github.com/codefly-dev/core/generated/go/codefly/services/agent/v1"
 	"google.golang.org/protobuf/types/known/durationpb"
 
 	"github.com/codefly-dev/core/agents/helpers/code"
@@ -27,7 +27,7 @@ import (
 	"github.com/codefly-dev/core/llmout"
 	"github.com/codefly-dev/core/wool"
 
-	runtimev0 "github.com/codefly-dev/core/generated/go/codefly/services/runtime/v0"
+	runtimev1 "github.com/codefly-dev/core/generated/go/codefly/services/runtime/v1"
 	"github.com/codefly-dev/core/resources"
 	runners "github.com/codefly-dev/core/runners/base"
 	dockerrun "github.com/codefly-dev/core/runners/dockerrun"
@@ -42,14 +42,14 @@ type Runtime struct {
 	// internal
 	runnerEnvironment   runners.RunnerEnvironment
 	runner              runners.Proc
-	workspaceConfigs    []*basev0.Configuration
+	workspaceConfigs    []*basev1.Configuration
 	dependenciesMu      sync.Mutex
 	executionProfile    NextExecutionProfile
 	readinessTimeout    time.Duration
 	packageManifest     *nodePackageManifest
 	projectKind         nodeProjectKind
-	dependencyEndpoints []*basev0.Endpoint
-	dependencyMappings  []*basev0.NetworkMapping
+	dependencyEndpoints []*basev1.Endpoint
+	dependencyMappings  []*basev1.NetworkMapping
 	// linkWarnings remembers which uninstalled-linked-package reasons have
 	// been reported, for which link set. Guarded by dependenciesMu.
 	linkWarnings map[string]bool
@@ -63,7 +63,7 @@ func NewRuntime(service *Service) *Runtime {
 // toolchains, falling back to container mode when the preferred mode is
 // unavailable. Mirrors the go-grpc/python pattern so mode selection is
 // consistent across all three codefly-ecosystem runtimes.
-func (s *Runtime) SetRuntimeContext(_ context.Context, runtimeContext *basev0.RuntimeContext) error {
+func (s *Runtime) SetRuntimeContext(_ context.Context, runtimeContext *basev1.RuntimeContext) error {
 	s.Runtime.RuntimeContext = setNextjsRuntimeContext(runtimeContext)
 	return nil
 }
@@ -76,7 +76,7 @@ func (s *Runtime) SetRuntimeContext(_ context.Context, runtimeContext *basev0.Ru
 //
 // A nil argument is treated as AUTO so a missing SetRuntimeContext call never
 // panics here — an agent must never panic on host input.
-func setNextjsRuntimeContext(runtimeContext *basev0.RuntimeContext) *basev0.RuntimeContext {
+func setNextjsRuntimeContext(runtimeContext *basev1.RuntimeContext) *basev1.RuntimeContext {
 	kind := resources.RuntimeContextFree
 	if runtimeContext != nil {
 		kind = runtimeContext.Kind
@@ -204,7 +204,7 @@ func (s *Runtime) CreateRunnerEnvironment(ctx context.Context) error {
 	return nil
 }
 
-func (s *Runtime) Load(ctx context.Context, req *runtimev0.LoadRequest) (*runtimev0.LoadResponse, error) {
+func (s *Runtime) Load(ctx context.Context, req *runtimev1.LoadRequest) (*runtimev1.LoadResponse, error) {
 	err := s.Base.Load(ctx, req.Identity, s.Settings)
 	if err != nil {
 		return s.Runtime.LoadErrorf(err, "loading base")
@@ -288,8 +288,8 @@ func (s *Runtime) Load(ctx context.Context, req *runtimev0.LoadRequest) (*runtim
 // dropNilConfigs returns the configurations with any nil entries removed. The
 // runtime/init protos come from another process; a nil element must be skipped, not
 // dereferenced — an agent must never panic on the shape of its inputs.
-func dropNilConfigs(in []*basev0.Configuration) []*basev0.Configuration {
-	out := make([]*basev0.Configuration, 0, len(in))
+func dropNilConfigs(in []*basev1.Configuration) []*basev1.Configuration {
+	out := make([]*basev1.Configuration, 0, len(in))
 	for _, c := range in {
 		if c != nil {
 			out = append(out, c)
@@ -298,7 +298,7 @@ func dropNilConfigs(in []*basev0.Configuration) []*basev0.Configuration {
 	return out
 }
 
-func (s *Runtime) Init(ctx context.Context, req *runtimev0.InitRequest) (*runtimev0.InitResponse, error) {
+func (s *Runtime) Init(ctx context.Context, req *runtimev1.InitRequest) (*runtimev1.InitResponse, error) {
 	defer s.Wool.Catch()
 	ctx = s.Wool.Inject(ctx)
 
@@ -335,7 +335,7 @@ func (s *Runtime) Init(ctx context.Context, req *runtimev0.InitRequest) (*runtim
 		if nm == nil {
 			return s.Runtime.InitError(fmt.Errorf("no network mapping resolved for the http endpoint"))
 		}
-		if err := s.EnvironmentVariables.AddEndpoints(ctx, []*basev0.NetworkMapping{nm}, resources.NewNativeNetworkAccess()); err != nil {
+		if err := s.EnvironmentVariables.AddEndpoints(ctx, []*basev1.NetworkMapping{nm}, resources.NewNativeNetworkAccess()); err != nil {
 			return s.Runtime.InitError(err)
 		}
 	}
@@ -377,7 +377,7 @@ func (s *Runtime) Init(ctx context.Context, req *runtimev0.InitRequest) (*runtim
 	return s.Runtime.InitResponse()
 }
 
-func (s *Runtime) Start(ctx context.Context, req *runtimev0.StartRequest) (*runtimev0.StartResponse, error) {
+func (s *Runtime) Start(ctx context.Context, req *runtimev1.StartRequest) (*runtimev1.StartResponse, error) {
 	defer s.Wool.Catch()
 	ctx = s.Wool.Inject(ctx)
 	if s.HttpEndpoint == nil {
@@ -641,7 +641,7 @@ func stageGeneratedAssets(source, destination string) error {
 	return nil
 }
 
-func (s *Runtime) WaitForReady(ctx context.Context, net *basev0.NetworkInstance) error {
+func (s *Runtime) WaitForReady(ctx context.Context, net *basev1.NetworkInstance) error {
 	defer s.Wool.Catch()
 	ctx = s.Wool.Inject(ctx)
 
@@ -713,11 +713,11 @@ func waitForHTTPReady(
 	}
 }
 
-func (s *Runtime) Information(ctx context.Context, req *runtimev0.InformationRequest) (*runtimev0.InformationResponse, error) {
+func (s *Runtime) Information(ctx context.Context, req *runtimev1.InformationRequest) (*runtimev1.InformationResponse, error) {
 	return s.Runtime.InformationResponse(ctx, req)
 }
 
-func (s *Runtime) Stop(ctx context.Context, req *runtimev0.StopRequest) (*runtimev0.StopResponse, error) {
+func (s *Runtime) Stop(ctx context.Context, req *runtimev1.StopRequest) (*runtimev1.StopResponse, error) {
 	defer s.Wool.Catch()
 	ctx = s.Wool.Inject(ctx)
 
@@ -736,7 +736,7 @@ func (s *Runtime) Stop(ctx context.Context, req *runtimev0.StopRequest) (*runtim
 	return s.Runtime.StopResponse()
 }
 
-func (s *Runtime) Destroy(ctx context.Context, req *runtimev0.DestroyRequest) (*runtimev0.DestroyResponse, error) {
+func (s *Runtime) Destroy(ctx context.Context, req *runtimev1.DestroyRequest) (*runtimev1.DestroyResponse, error) {
 	defer s.Wool.Catch()
 	ctx = s.Wool.Inject(ctx)
 
@@ -762,11 +762,11 @@ func (s *Runtime) Destroy(ctx context.Context, req *runtimev0.DestroyRequest) (*
 	return s.Runtime.DestroyResponse()
 }
 
-func (s *Runtime) Test(ctx context.Context, req *runtimev0.TestRequest) (*runtimev0.TestResponse, error) {
+func (s *Runtime) Test(ctx context.Context, req *runtimev1.TestRequest) (*runtimev1.TestResponse, error) {
 	defer s.Wool.Catch()
 	ctx = s.Wool.Inject(ctx)
 	if req == nil {
-		req = &runtimev0.TestRequest{}
+		req = &runtimev1.TestRequest{}
 	}
 
 	// Map suite to the package-owned npm script, then derive the runner from
@@ -930,7 +930,7 @@ func (s *Runtime) testEnvironment(ctx context.Context, suite string) ([]*resourc
 	if suite == "" {
 		suite = "unit"
 	}
-	if suiteDependencyMode(&agentv0.TaskKey{Phase: agentv0.TaskPhase_TASK_PHASE_TEST, Suite: suite}) == agentv0.TestDependencyMode_TEST_DEPENDENCY_MODE_NONE {
+	if suiteDependencyMode(&agentv1.TaskKey{Phase: agentv1.TaskPhase_TASK_PHASE_TEST, Suite: suite}) == agentv1.TestDependencyMode_TEST_DEPENDENCY_MODE_NONE {
 		return s.EnvironmentVariables.All()
 	}
 	// Init reaches a test target even when the policy never starts it. Verify
@@ -1002,7 +1002,7 @@ func (s *Runtime) completedConsoleTestResult(
 	consoleOutput string,
 	duration time.Duration,
 	runErr error,
-) (*runtimev0.TestResponse, error) {
+) (*runtimev1.TestResponse, error) {
 	total, passed, failed, skipped := parseNPMTestOutput(consoleOutput)
 	if total == 0 {
 		if runErr == nil {
@@ -1010,33 +1010,33 @@ func (s *Runtime) completedConsoleTestResult(
 		}
 		return s.Runtime.TestErrorf(runErr, "test runner produced no results")
 	}
-	state := runtimev0.TestRunResult_PASSED
+	state := runtimev1.TestRunResult_PASSED
 	message := "all tests passed"
 	if failed > 0 {
-		state = runtimev0.TestRunResult_FAILED
+		state = runtimev1.TestRunResult_FAILED
 		message = fmt.Sprintf("%d test(s) failed", failed)
 	} else if runErr != nil {
-		state = runtimev0.TestRunResult_ERRORED
+		state = runtimev1.TestRunResult_ERRORED
 		message = "test command failed after producing aggregate results"
 	}
-	statusState := runtimev0.TestStatus_SUCCESS
-	if state != runtimev0.TestRunResult_PASSED {
-		statusState = runtimev0.TestStatus_ERROR
+	statusState := runtimev1.TestStatus_SUCCESS
+	if state != runtimev1.TestRunResult_PASSED {
+		statusState = runtimev1.TestStatus_ERROR
 	}
 	diagnostics := llmout.Compress("npm", args, consoleOutput)
 	failures := []string(nil)
-	if state != runtimev0.TestRunResult_PASSED && strings.TrimSpace(diagnostics) != "" {
+	if state != runtimev1.TestRunResult_PASSED && strings.TrimSpace(diagnostics) != "" {
 		failures = append(failures, diagnostics)
 	}
-	response := &runtimev0.TestResponse{
-		Status: &runtimev0.TestStatus{State: statusState, Message: message},
-		Run: &runtimev0.TestRun{
+	response := &runtimev1.TestResponse{
+		Status: &runtimev1.TestStatus{State: statusState, Message: message},
+		Run: &runtimev1.TestRun{
 			Runner:    string(runnerKind),
 			SuiteName: suite,
 			Duration:  durationpb.New(duration),
 		},
-		Result: &runtimev0.TestRunResult{State: state, Message: message},
-		Counts: &runtimev0.TestCounts{
+		Result: &runtimev1.TestRunResult{State: state, Message: message},
+		Counts: &runtimev1.TestCounts{
 			Total:   total,
 			Passed:  passed,
 			Failed:  failed,
@@ -1112,9 +1112,9 @@ func nodeTestReporterConfiguration(runner nodeTestRunner, jsonFile string) ([]st
 }
 
 func completedTestRPCResult(
-	response *runtimev0.TestResponse,
+	response *runtimev1.TestResponse,
 	executionErr error,
-) (*runtimev0.TestResponse, error) {
+) (*runtimev1.TestResponse, error) {
 	if response == nil {
 		return nil, executionErr
 	}
@@ -1124,11 +1124,11 @@ func completedTestRPCResult(
 // Lint owns the JavaScript/TypeScript static-lint phase for every service made
 // from this generic Next.js agent. CI only dispatches this RPC; it never needs
 // to know that the current implementation uses an npm script.
-func (s *Runtime) Lint(ctx context.Context, req *runtimev0.LintRequest) (*runtimev0.LintResponse, error) {
+func (s *Runtime) Lint(ctx context.Context, req *runtimev1.LintRequest) (*runtimev1.LintResponse, error) {
 	defer s.Wool.Catch()
 	ctx = s.Wool.Inject(ctx)
 	if req == nil {
-		req = &runtimev0.LintRequest{}
+		req = &runtimev1.LintRequest{}
 	}
 	args := []string{"run", "lint"}
 	if req.Target != "" {
@@ -1145,7 +1145,7 @@ func (s *Runtime) Lint(ctx context.Context, req *runtimev0.LintRequest) (*runtim
 
 // Build is the native compile/typecheck phase. It is deliberately separate
 // from Builder.Build, which owns the deployable image.
-func (s *Runtime) Build(ctx context.Context, _ *runtimev0.BuildRequest) (*runtimev0.BuildResponse, error) {
+func (s *Runtime) Build(ctx context.Context, _ *runtimev1.BuildRequest) (*runtimev1.BuildResponse, error) {
 	defer s.Wool.Catch()
 	ctx = s.Wool.Inject(ctx)
 

@@ -3,11 +3,11 @@ package main
 import (
 	"testing"
 
-	builderv0 "github.com/codefly-dev/core/generated/go/codefly/services/builder/v0"
+	builderv1 "github.com/codefly-dev/core/generated/go/codefly/services/builder/v1"
 )
 
 func TestNodeAuditOptionsPreserveRequestedDependencyScope(t *testing.T) {
-	options := nodeAuditOptions(&builderv0.AuditRequest{
+	options := nodeAuditOptions(&builderv1.AuditRequest{
 		IncludeOutdated:        true,
 		IncludeDevDependencies: true,
 	})
@@ -15,7 +15,7 @@ func TestNodeAuditOptionsPreserveRequestedDependencyScope(t *testing.T) {
 		t.Fatalf("node audit options = %+v", options)
 	}
 
-	runtimeOnly := nodeAuditOptions(&builderv0.AuditRequest{})
+	runtimeOnly := nodeAuditOptions(&builderv1.AuditRequest{})
 	if runtimeOnly.IncludeOutdated || runtimeOnly.IncludeDevDependencies {
 		t.Fatalf("runtime-only audit options = %+v", runtimeOnly)
 	}

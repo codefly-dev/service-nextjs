@@ -5,7 +5,7 @@ import (
 	"os"
 	"testing"
 
-	builderv0 "github.com/codefly-dev/core/generated/go/codefly/services/builder/v0"
+	builderv1 "github.com/codefly-dev/core/generated/go/codefly/services/builder/v1"
 	"github.com/codefly-dev/core/resources"
 	"github.com/stretchr/testify/require"
 )
@@ -21,7 +21,7 @@ func TestManifestGuardRender(t *testing.T) {
 	if destination == "" {
 		t.Skip("run by the manifest guard")
 	}
-	profile := builderv0.KubernetesOutputProfile_KUBERNETES_OUTPUT_PROFILE_RESTRICTED_PORTABLE_V1
+	profile := builderv1.KubernetesOutputProfile_KUBERNETES_OUTPUT_PROFILE_RESTRICTED_PORTABLE_V1
 	require.Equal(t, profile.String(), os.Getenv("CODEFLY_MANIFEST_PROFILE"))
 
 	ctx := context.Background()
@@ -36,20 +36,20 @@ func TestManifestGuardRender(t *testing.T) {
 	require.NoError(t, err)
 
 	builder := NewBuilder(NewService())
-	_, err = builder.Load(ctx, &builderv0.LoadRequest{
+	_, err = builder.Load(ctx, &builderv1.LoadRequest{
 		Identity:     identity,
-		CreationMode: &builderv0.CreationMode{Communicate: false},
+		CreationMode: &builderv1.CreationMode{Communicate: false},
 	})
 	require.NoError(t, err)
 
-	response, err := builder.Deploy(ctx, &builderv0.DeploymentRequest{
+	response, err := builder.Deploy(ctx, &builderv1.DeploymentRequest{
 		Environment: environmentProto,
-		Deployment: &builderv0.Deployment{
-			Kind: &builderv0.Deployment_Kubernetes{
-				Kubernetes: &builderv0.KubernetesDeployment{
+		Deployment: &builderv1.Deployment{
+			Kind: &builderv1.Deployment_Kubernetes{
+				Kubernetes: &builderv1.KubernetesDeployment{
 					Namespace:   os.Getenv("CODEFLY_MANIFEST_NAMESPACE"),
 					Destination: destination,
-					BuildContext: &builderv0.DockerBuildContext{
+					BuildContext: &builderv1.DockerBuildContext{
 						DockerRepository: "registry.example.com",
 						ImageDigest:      "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 					},
@@ -59,5 +59,5 @@ func TestManifestGuardRender(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	require.Equal(t, builderv0.DeploymentStatus_SUCCESS, response.GetState().GetState())
+	require.Equal(t, builderv1.DeploymentStatus_SUCCESS, response.GetState().GetState())
 }

@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/codefly-dev/core/agents/services"
-	builderv0 "github.com/codefly-dev/core/generated/go/codefly/services/builder/v0"
+	builderv1 "github.com/codefly-dev/core/generated/go/codefly/services/builder/v1"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -52,15 +52,15 @@ func TestBuildRecipeUsesConfiguredSourceDirectory(t *testing.T) {
 			require.NoError(t, os.WriteFile(filepath.Join(project, "package.json"), []byte(manifest), 0o644))
 			require.NoError(t, os.WriteFile(filepath.Join(project, "package-lock.json"), []byte(`{"lockfileVersion":3}`), 0o644))
 			builder := NewBuilder(NewService())
-			_, err := builder.Load(t.Context(), &builderv0.LoadRequest{Identity: identity, CreationMode: &builderv0.CreationMode{Communicate: false}})
+			_, err := builder.Load(t.Context(), &builderv1.LoadRequest{Identity: identity, CreationMode: &builderv1.CreationMode{Communicate: false}})
 			require.NoError(t, err)
 			// Render through the same Build RPC used by the CLI, then check every
 			// context COPY against real files, including projects without packages/.
 			output := t.TempDir()
-			response, err := builder.Build(t.Context(), &builderv0.BuildRequest{OutputDirectory: output,
-				BuildContext: &builderv0.BuildContext{Kind: &builderv0.BuildContext_DockerBuildContext{DockerBuildContext: &builderv0.DockerBuildContext{DockerRepository: "registry.example.com"}}}})
+			response, err := builder.Build(t.Context(), &builderv1.BuildRequest{OutputDirectory: output,
+				BuildContext: &builderv1.BuildContext{Kind: &builderv1.BuildContext_DockerBuildContext{DockerBuildContext: &builderv1.DockerBuildContext{DockerRepository: "registry.example.com"}}}})
 			require.NoError(t, err)
-			require.Equal(t, builderv0.BuildStatus_SUCCESS, response.GetState().GetState())
+			require.Equal(t, builderv1.BuildStatus_SUCCESS, response.GetState().GetState())
 			require.Equal(t, "context", response.GetResult().GetDockerBuildPlan().GetRecipes()[0].GetContext())
 			require.NoError(t, services.VerifyDockerBuildPlan(output, response.GetResult().GetDockerBuildPlan()))
 			data, err := os.ReadFile(filepath.Join(output, "Dockerfile"))
@@ -87,15 +87,15 @@ func TestBuildRecipeRefusesSourceOutsideServiceContext(t *testing.T) {
 	identity, _ := testIdentity(t, t.TempDir())
 	writeRecipePackage(t, filepath.Join(identity.WorkspacePath, identity.RelativeToWorkspace, "code"))
 	builder := NewBuilder(NewService())
-	_, err := builder.Load(t.Context(), &builderv0.LoadRequest{Identity: identity, CreationMode: &builderv0.CreationMode{Communicate: false}})
+	_, err := builder.Load(t.Context(), &builderv1.LoadRequest{Identity: identity, CreationMode: &builderv1.CreationMode{Communicate: false}})
 	require.NoError(t, err)
 	for _, source := range []string{"../sibling", t.TempDir()} {
 		builder.Settings.SourceDir = source
 		output := filepath.Join(t.TempDir(), "recipe")
-		response, err := builder.Build(t.Context(), &builderv0.BuildRequest{OutputDirectory: output,
-			BuildContext: &builderv0.BuildContext{Kind: &builderv0.BuildContext_DockerBuildContext{DockerBuildContext: &builderv0.DockerBuildContext{DockerRepository: "registry.example.com"}}}})
+		response, err := builder.Build(t.Context(), &builderv1.BuildRequest{OutputDirectory: output,
+			BuildContext: &builderv1.BuildContext{Kind: &builderv1.BuildContext_DockerBuildContext{DockerBuildContext: &builderv1.DockerBuildContext{DockerRepository: "registry.example.com"}}}})
 		require.NoError(t, err)
-		require.Equal(t, builderv0.BuildStatus_ERROR, response.GetState().GetState())
+		require.Equal(t, builderv1.BuildStatus_ERROR, response.GetState().GetState())
 		require.Contains(t, response.GetState().GetMessage(), "inside the service build context")
 		require.NoDirExists(t, output)
 	}
@@ -110,9 +110,9 @@ func TestBuildEmitsRecipeWhenOutputDirectorySet(t *testing.T) {
 	writeRecipePackage(t, filepath.Join(identity.WorkspacePath, identity.RelativeToWorkspace, "code"))
 
 	builder := NewBuilder(NewService())
-	_, err := builder.Load(ctx, &builderv0.LoadRequest{
+	_, err := builder.Load(ctx, &builderv1.LoadRequest{
 		Identity:     identity,
-		CreationMode: &builderv0.CreationMode{Communicate: false},
+		CreationMode: &builderv1.CreationMode{Communicate: false},
 	})
 	require.NoError(t, err)
 
@@ -120,18 +120,18 @@ func TestBuildEmitsRecipeWhenOutputDirectorySet(t *testing.T) {
 	// Unrelated caller-owned files survive and enter the whole TREE inventory.
 	require.NoError(t, os.WriteFile(filepath.Join(output, "Dockerfile.dockerignore"), []byte("stale"), 0o644))
 
-	response, err := builder.Build(ctx, &builderv0.BuildRequest{
+	response, err := builder.Build(ctx, &builderv1.BuildRequest{
 		OutputDirectory: output,
-		BuildContext: &builderv0.BuildContext{
-			Kind: &builderv0.BuildContext_DockerBuildContext{
-				DockerBuildContext: &builderv0.DockerBuildContext{
+		BuildContext: &builderv1.BuildContext{
+			Kind: &builderv1.BuildContext_DockerBuildContext{
+				DockerBuildContext: &builderv1.DockerBuildContext{
 					DockerRepository: "registry.example.com",
 				},
 			},
 		},
 	})
 	require.NoError(t, err)
-	require.Equal(t, builderv0.BuildStatus_SUCCESS, response.GetState().GetState())
+	require.Equal(t, builderv1.BuildStatus_SUCCESS, response.GetState().GetState())
 
 	plan := response.GetResult().GetDockerBuildPlan()
 	require.NotNil(t, plan)
@@ -143,7 +143,7 @@ func TestBuildEmitsRecipeWhenOutputDirectorySet(t *testing.T) {
 	require.Equal(t, "frontend", recipe.GetName())
 	require.Equal(t, "Dockerfile", recipe.GetDockerfile())
 	require.Equal(t, "context", recipe.GetContext())
-	require.Equal(t, builderv0.RecipeContextRoot_RECIPE_CONTEXT_ROOT_OUTPUT, recipe.GetContextRoot())
+	require.Equal(t, builderv1.RecipeContextRoot_RECIPE_CONTEXT_ROOT_OUTPUT, recipe.GetContextRoot())
 	require.Equal(t, "dockerignore", recipe.GetDockerignore())
 	require.Equal(t, []string{"linux/amd64", "linux/arm64"}, recipe.GetPlatforms())
 	require.Contains(t, recipe.GetImage(), "registry.example.com/mod/frontend")
@@ -181,19 +181,19 @@ func TestBuildRecipeCarriesDeclaredBuildArgs(t *testing.T) {
 	writeRecipePackage(t, filepath.Join(identity.WorkspacePath, identity.RelativeToWorkspace, "code"))
 
 	builder := NewBuilder(NewService())
-	_, err := builder.Load(ctx, &builderv0.LoadRequest{
+	_, err := builder.Load(ctx, &builderv1.LoadRequest{
 		Identity:     identity,
-		CreationMode: &builderv0.CreationMode{Communicate: false},
+		CreationMode: &builderv1.CreationMode{Communicate: false},
 	})
 	require.NoError(t, err)
 	builder.Settings.BuildArgs = map[string]string{"FRONTEND_SKIN_RUNTIME": "1"}
 
 	output := t.TempDir()
-	response, err := builder.Build(ctx, &builderv0.BuildRequest{
+	response, err := builder.Build(ctx, &builderv1.BuildRequest{
 		OutputDirectory: output,
-		BuildContext: &builderv0.BuildContext{
-			Kind: &builderv0.BuildContext_DockerBuildContext{
-				DockerBuildContext: &builderv0.DockerBuildContext{
+		BuildContext: &builderv1.BuildContext{
+			Kind: &builderv1.BuildContext_DockerBuildContext{
+				DockerBuildContext: &builderv1.DockerBuildContext{
 					DockerRepository: "registry.example.com",
 				},
 			},
@@ -221,7 +221,7 @@ func TestRecipeBuildNegotiationOverGRPC(t *testing.T) {
 	defer cancel()
 	implementation := NewBuilder(NewService())
 	server := grpc.NewServer()
-	builderv0.RegisterBuilderServer(server, implementation)
+	builderv1.RegisterBuilderServer(server, implementation)
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	go func() { _ = server.Serve(listener) }()
@@ -231,43 +231,43 @@ func TestRecipeBuildNegotiationOverGRPC(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, conn.Close()) })
 	client := services.NewBuilderAgentClient(conn)
 
-	capabilities, err := client.BuildCapabilities(ctx, &builderv0.BuildCapabilitiesRequest{})
+	capabilities, err := client.BuildCapabilities(ctx, &builderv1.BuildCapabilitiesRequest{})
 	require.NoError(t, err)
 	require.True(t, capabilities.GetBuildxSelection())
-	_, err = client.BuilderClient.Build(ctx, &builderv0.BuildRequest{})
+	_, err = client.BuilderClient.Build(ctx, &builderv1.BuildRequest{})
 	require.Equal(t, codes.InvalidArgument, status.Code(err))
 
 	root := t.TempDir()
 	identity, _ := testIdentity(t, root)
 	writeRecipePackage(t, filepath.Join(root, "mod", "frontend", "code"))
-	_, err = client.Load(ctx, &builderv0.LoadRequest{
+	_, err = client.Load(ctx, &builderv1.LoadRequest{
 		Identity:     identity,
-		CreationMode: &builderv0.CreationMode{Communicate: false},
+		CreationMode: &builderv1.CreationMode{Communicate: false},
 	})
 	require.NoError(t, err)
 	for _, selected := range []string{"", "explicit-builder", "cache-builder"} {
 		t.Run("builder="+selected, func(t *testing.T) {
-			dockerContext := &builderv0.DockerBuildContext{
+			dockerContext := &builderv1.DockerBuildContext{
 				DockerRepository: "registry.example.com",
 				BuildxBuilder:    selected,
 			}
 			if selected == "cache-builder" {
-				dockerContext.Cache = &builderv0.BuildCacheOptions{
+				dockerContext.Cache = &builderv1.BuildCacheOptions{
 					Backend: "registry",
 					Imports: []string{"registry.example.com/cache/frontend"},
 					Exports: []string{"registry.example.com/cache/frontend"},
 					Scope:   "workspace/frontend",
 				}
 			}
-			request := &builderv0.BuildRequest{
+			request := &builderv1.BuildRequest{
 				OutputDirectory: t.TempDir(),
-				BuildContext: &builderv0.BuildContext{
-					Kind: &builderv0.BuildContext_DockerBuildContext{DockerBuildContext: dockerContext},
+				BuildContext: &builderv1.BuildContext{
+					Kind: &builderv1.BuildContext_DockerBuildContext{DockerBuildContext: dockerContext},
 				},
 			}
 			response, err := client.Build(ctx, request)
 			require.NoError(t, err)
-			require.Equal(t, builderv0.BuildStatus_SUCCESS, response.GetState().GetState())
+			require.Equal(t, builderv1.BuildStatus_SUCCESS, response.GetState().GetState())
 			plan := response.GetResult().GetDockerBuildPlan()
 			require.NotNil(t, plan)
 			require.NoError(t, services.VerifyDockerBuildPlan(request.OutputDirectory, plan))

@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/codefly-dev/core/agents/services"
-	builderv0 "github.com/codefly-dev/core/generated/go/codefly/services/builder/v0"
+	builderv1 "github.com/codefly-dev/core/generated/go/codefly/services/builder/v1"
 	"github.com/stretchr/testify/require"
 )
 
@@ -66,7 +66,7 @@ func TestDeclaredBuildProjection(t *testing.T) {
 	require.Equal(t, before, after)
 	require.FileExists(t, filepath.Join(output, "caller.txt"))
 	buildInputWrite(t, output, "Dockerfile", "FROM scratch\nCOPY src /src\n")
-	plan, err := services.BuildDockerBuildPlan(output, []*builderv0.DockerBuildRecipe{{Name: "web", Image: "example/web:1", Dockerfile: "Dockerfile", Context: "context", ContextRoot: builderv0.RecipeContextRoot_RECIPE_CONTEXT_ROOT_OUTPUT}})
+	plan, err := services.BuildDockerBuildPlan(output, []*builderv1.DockerBuildRecipe{{Name: "web", Image: "example/web:1", Dockerfile: "Dockerfile", Context: "context", ContextRoot: builderv1.RecipeContextRoot_RECIPE_CONTEXT_ROOT_OUTPUT}})
 	require.NoError(t, err)
 	require.NoError(t, services.VerifyDockerBuildPlan(output, plan))
 	buildInputWrite(t, output, "context/src/injected", "extra")

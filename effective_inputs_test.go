@@ -13,8 +13,8 @@ import (
 
 	"github.com/codefly-dev/core/agents"
 	"github.com/codefly-dev/core/ciinputs"
-	agentv0 "github.com/codefly-dev/core/generated/go/codefly/services/agent/v0"
-	builderv0 "github.com/codefly-dev/core/generated/go/codefly/services/builder/v0"
+	agentv1 "github.com/codefly-dev/core/generated/go/codefly/services/agent/v1"
+	builderv1 "github.com/codefly-dev/core/generated/go/codefly/services/builder/v1"
 	"github.com/codefly-dev/core/resources"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
@@ -25,7 +25,7 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-func inputsFixture(t *testing.T) (*Service, agentv0.AgentClient) {
+func inputsFixture(t *testing.T) (*Service, agentv1.AgentClient) {
 	t.Helper()
 	root := t.TempDir()
 	service := NewService()
@@ -38,17 +38,17 @@ func inputsFixture(t *testing.T) (*Service, agentv0.AgentClient) {
 	return service, inputClient(t, service)
 }
 
-func inputClient(t *testing.T, service *Service) agentv0.AgentClient {
+func inputClient(t *testing.T, service *Service) agentv1.AgentClient {
 	t.Helper()
 	listener := bufconn.Listen(1024 * 1024)
 	server := grpc.NewServer()
-	agentv0.RegisterAgentServer(server, service)
+	agentv1.RegisterAgentServer(server, service)
 	go func() { _ = server.Serve(listener) }()
 	t.Cleanup(server.Stop)
 	conn, err := grpc.NewClient("passthrough:///inputs", grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) { return listener.Dial() }))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = conn.Close() })
-	return agentv0.NewAgentClient(conn)
+	return agentv1.NewAgentClient(conn)
 }
 
 func inputWrite(t *testing.T, root, name, content string) {
@@ -58,7 +58,7 @@ func inputWrite(t *testing.T, root, name, content string) {
 	require.NoError(t, os.WriteFile(name, []byte(content), 0644))
 }
 
-func inputTask(t *testing.T, response *agentv0.GetEffectiveInputsResponse, phase agentv0.TaskPhase, suite string) *agentv0.TaskInputs {
+func inputTask(t *testing.T, response *agentv1.GetEffectiveInputsResponse, phase agentv1.TaskPhase, suite string) *agentv1.TaskInputs {
 	t.Helper()
 	for _, task := range response.Tasks {
 		if task.Task.Phase == phase && task.Task.Suite == suite {
@@ -69,7 +69,7 @@ func inputTask(t *testing.T, response *agentv0.GetEffectiveInputsResponse, phase
 	return nil
 }
 
-func pathInput(t *testing.T, task *agentv0.TaskInputs, name string) *agentv0.EffectiveInput {
+func pathInput(t *testing.T, task *agentv1.TaskInputs, name string) *agentv1.EffectiveInput {
 	t.Helper()
 	for _, in := range task.Inputs {
 		if in.Path && in.Name == name {
@@ -80,29 +80,29 @@ func pathInput(t *testing.T, task *agentv0.TaskInputs, name string) *agentv0.Eff
 	return nil
 }
 
-func inputContentIdentity(data []byte) *agentv0.EffectiveIdentity {
+func inputContentIdentity(data []byte) *agentv1.EffectiveIdentity {
 	sum := sha256.Sum256(data)
-	return &agentv0.EffectiveIdentity{Kind: agentv0.EffectiveIdentityKind_EFFECTIVE_IDENTITY_KIND_SHA256, Digest: hex.EncodeToString(sum[:])}
+	return &agentv1.EffectiveIdentity{Kind: agentv1.EffectiveIdentityKind_EFFECTIVE_IDENTITY_KIND_SHA256, Digest: hex.EncodeToString(sum[:])}
 }
 
 func TestEffectiveInputsHeadlessCoreDiscovery(t *testing.T) {
 	loaded, _ := inputsFixture(t)
 	cold := NewService()
 	client := inputClient(t, cold)
-	info, err := client.GetAgentInformation(context.Background(), &agentv0.AgentInformationRequest{})
+	info, err := client.GetAgentInformation(context.Background(), &agentv1.AgentInformationRequest{})
 	require.NoError(t, err)
 	require.Equal(t, []uint32{1}, info.EffectiveInputsVersions)
 	require.True(t, proto.Equal(nextValidationCapabilities(), info.Validation))
 	required, err := ciinputs.Required(info.Validation)
 	require.NoError(t, err)
-	req := &agentv0.GetEffectiveInputsRequest{SchemaVersion: 1, Snapshot: "headless"}
+	req := &agentv1.GetEffectiveInputsRequest{SchemaVersion: 1, Snapshot: "headless"}
 	tasks, err := ciinputs.Discover(context.Background(), client, info, req, required)
 	require.NoError(t, err)
 	require.Len(t, tasks, len(required))
 	for _, task := range tasks {
 		require.NotNil(t, task.Declaration)
 		name := "code/package.json"
-		if task.Key.Phase == agentv0.TaskPhase_TASK_PHASE_SBOM {
+		if task.Key.Phase == agentv1.TaskPhase_TASK_PHASE_SBOM {
 			name = "service.codefly.yaml"
 		}
 		require.NotEmpty(t, pathInput(t, task.Declaration, name))
@@ -120,10 +120,10 @@ func TestEffectiveInputsDoesNotHashSecretsOrSymlinkTargets(t *testing.T) {
 	inputWrite(t, service.Location, "code/credentials/password", "123456")
 	inputWrite(t, service.Location, "code/.ignored-secret", "another-secret")
 	require.NoError(t, os.Symlink("credentials/password", filepath.Join(service.Location, "code/package.json")))
-	response, err := client.GetEffectiveInputs(context.Background(), &agentv0.GetEffectiveInputsRequest{SchemaVersion: 1, Snapshot: "secret"})
+	response, err := client.GetEffectiveInputs(context.Background(), &agentv1.GetEffectiveInputsRequest{SchemaVersion: 1, Snapshot: "secret"})
 	require.NoError(t, err)
 	for _, task := range response.Tasks {
-		if task.Task.Phase == agentv0.TaskPhase_TASK_PHASE_SBOM {
+		if task.Task.Phase == agentv1.TaskPhase_TASK_PHASE_SBOM {
 			continue
 		}
 		for _, name := range []string{"code/package.json", "code/credentials/password"} {
@@ -148,7 +148,7 @@ func TestEffectiveInputsLargeTreeFitsRPC(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, file.Truncate(8<<30))
 	require.NoError(t, file.Close())
-	response, err := client.GetEffectiveInputs(context.Background(), &agentv0.GetEffectiveInputsRequest{SchemaVersion: 1, Snapshot: "large"})
+	response, err := client.GetEffectiveInputs(context.Background(), &agentv1.GetEffectiveInputsRequest{SchemaVersion: 1, Snapshot: "large"})
 	require.NoError(t, err)
 	require.Less(t, proto.Size(response), inputResponseLimit)
 	require.Len(t, response.Tasks, 11)
@@ -161,12 +161,12 @@ func TestEffectiveInputsDependencyKindsAndFreshMetadata(t *testing.T) {
 	for _, kind := range append(resources.DeclarableDependencyKinds(), resources.DependencyKindLegacy) {
 		declaration.ServiceDependencies = []*resources.ServiceDependency{{Name: "producer", Kind: kind}}
 		require.NoError(t, declaration.SaveAtDir(context.Background(), service.Location))
-		implementation := &agentv0.EffectiveInput{Kind: agentv0.EffectiveInputKind_EFFECTIVE_INPUT_KIND_SERVICE_IMPLEMENTATION, Owner: "app/producer", Name: "implementation", Identity: inputContentIdentity([]byte("api"))}
-		artifact := &agentv0.EffectiveInput{Kind: agentv0.EffectiveInputKind_EFFECTIVE_INPUT_KIND_ARTIFACT, Owner: "app/producer", Name: "artifact", Identity: inputContentIdentity([]byte("image"))}
-		response, err := client.GetEffectiveInputs(context.Background(), &agentv0.GetEffectiveInputsRequest{SchemaVersion: 1, Snapshot: string(kind) + "snapshot", Context: []*agentv0.EffectiveInput{implementation, artifact}})
+		implementation := &agentv1.EffectiveInput{Kind: agentv1.EffectiveInputKind_EFFECTIVE_INPUT_KIND_SERVICE_IMPLEMENTATION, Owner: "app/producer", Name: "implementation", Identity: inputContentIdentity([]byte("api"))}
+		artifact := &agentv1.EffectiveInput{Kind: agentv1.EffectiveInputKind_EFFECTIVE_INPUT_KIND_ARTIFACT, Owner: "app/producer", Name: "artifact", Identity: inputContentIdentity([]byte("image"))}
+		response, err := client.GetEffectiveInputs(context.Background(), &agentv1.GetEffectiveInputsRequest{SchemaVersion: 1, Snapshot: string(kind) + "snapshot", Context: []*agentv1.EffectiveInput{implementation, artifact}})
 		require.NoError(t, err)
 		for _, suite := range []string{"unit", "pure", "integration", "e2e", "smoke"} {
-			task := inputTask(t, response, agentv0.TaskPhase_TASK_PHASE_TEST, suite)
+			task := inputTask(t, response, agentv1.TaskPhase_TASK_PHASE_TEST, suite)
 			if suite != "pure" && kind.Participates(resources.StageRun) {
 				require.Contains(t, task.RuntimeServices, "app/producer")
 				require.True(t, hasInput(task, implementation))
@@ -178,7 +178,7 @@ func TestEffectiveInputsDependencyKindsAndFreshMetadata(t *testing.T) {
 				require.Contains(t, task.RuntimeServices, "app/web")
 			}
 		}
-		task := inputTask(t, response, agentv0.TaskPhase_TASK_PHASE_ARTIFACT_BUILD, "")
+		task := inputTask(t, response, agentv1.TaskPhase_TASK_PHASE_ARTIFACT_BUILD, "")
 		require.Empty(t, task.RuntimeServices)
 		require.False(t, hasInput(task, implementation))
 		if kind.Participates(resources.StageBuild) {
@@ -193,8 +193,8 @@ func TestEffectiveInputsProtectedContextAndHistory(t *testing.T) {
 	_, client := inputsFixture(t)
 	protected, err := ciinputs.Protect([]byte("01234567890123456789012345678901"), "key-v1", []byte("secret"))
 	require.NoError(t, err)
-	in := &agentv0.EffectiveInput{Kind: agentv0.EffectiveInputKind_EFFECTIVE_INPUT_KIND_CONFIGURATION, Owner: "app/web", Name: "service.codefly.yaml", Path: true, Mode: 0100644, Sensitive: true, Identity: protected}
-	req := &agentv0.GetEffectiveInputsRequest{SchemaVersion: 1, Snapshot: "s", Context: []*agentv0.EffectiveInput{in}}
+	in := &agentv1.EffectiveInput{Kind: agentv1.EffectiveInputKind_EFFECTIVE_INPUT_KIND_CONFIGURATION, Owner: "app/web", Name: "service.codefly.yaml", Path: true, Mode: 0100644, Sensitive: true, Identity: protected}
+	req := &agentv1.GetEffectiveInputsRequest{SchemaVersion: 1, Snapshot: "s", Context: []*agentv1.EffectiveInput{in}}
 	response, err := client.GetEffectiveInputs(context.Background(), req)
 	require.NoError(t, err)
 	for _, task := range response.Tasks {
@@ -214,19 +214,19 @@ func TestEffectiveInputsProtectedContextAndHistory(t *testing.T) {
 func TestEffectiveInputsInvalidRequests(t *testing.T) {
 	_, client := inputsFixture(t)
 	for _, tc := range []struct {
-		req  *agentv0.GetEffectiveInputsRequest
+		req  *agentv1.GetEffectiveInputsRequest
 		code codes.Code
 	}{
-		{&agentv0.GetEffectiveInputsRequest{SchemaVersion: 2, Snapshot: "s"}, codes.Unimplemented},
-		{&agentv0.GetEffectiveInputsRequest{SchemaVersion: 1}, codes.InvalidArgument},
-		{&agentv0.GetEffectiveInputsRequest{SchemaVersion: 1, Snapshot: "s", Context: []*agentv0.EffectiveInput{{Kind: agentv0.EffectiveInputKind_EFFECTIVE_INPUT_KIND_ENVIRONMENT, Owner: "web", Name: "secret", Sensitive: true, Identity: inputContentIdentity([]byte("secret"))}}}, codes.InvalidArgument},
+		{&agentv1.GetEffectiveInputsRequest{SchemaVersion: 2, Snapshot: "s"}, codes.Unimplemented},
+		{&agentv1.GetEffectiveInputsRequest{SchemaVersion: 1}, codes.InvalidArgument},
+		{&agentv1.GetEffectiveInputsRequest{SchemaVersion: 1, Snapshot: "s", Context: []*agentv1.EffectiveInput{{Kind: agentv1.EffectiveInputKind_EFFECTIVE_INPUT_KIND_ENVIRONMENT, Owner: "web", Name: "secret", Sensitive: true, Identity: inputContentIdentity([]byte("secret"))}}}, codes.InvalidArgument},
 	} {
 		_, err := client.GetEffectiveInputs(context.Background(), tc.req)
 		require.Equal(t, tc.code, status.Code(err))
 	}
 }
 
-func hasInput(task *agentv0.TaskInputs, want *agentv0.EffectiveInput) bool {
+func hasInput(task *agentv1.TaskInputs, want *agentv1.EffectiveInput) bool {
 	for _, in := range task.Inputs {
 		if proto.Equal(in, want) {
 			return true
@@ -251,9 +251,9 @@ func TestEffectiveInputsOutputBudgets(t *testing.T) {
 // which services a suite needs started is not made untrue by a size condition.
 func TestEffectiveInputsOversizedResponseKeepsRuntimeServices(t *testing.T) {
 	_, client := inputsFixture(t)
-	req := &agentv0.GetEffectiveInputsRequest{SchemaVersion: 1, Snapshot: "bounded-response", Context: []*agentv0.EffectiveInput{{
-		Kind: agentv0.EffectiveInputKind_EFFECTIVE_INPUT_KIND_SERVICE_IMPLEMENTATION, Owner: "app/api", Name: "implementation",
-		Identity: &agentv0.EffectiveIdentity{Kind: agentv0.EffectiveIdentityKind_EFFECTIVE_IDENTITY_KIND_VERSIONED, Namespace: "fixture/v1", Digest: strings.Repeat("x", 200*1024)},
+	req := &agentv1.GetEffectiveInputsRequest{SchemaVersion: 1, Snapshot: "bounded-response", Context: []*agentv1.EffectiveInput{{
+		Kind: agentv1.EffectiveInputKind_EFFECTIVE_INPUT_KIND_SERVICE_IMPLEMENTATION, Owner: "app/api", Name: "implementation",
+		Identity: &agentv1.EffectiveIdentity{Kind: agentv1.EffectiveIdentityKind_EFFECTIVE_IDENTITY_KIND_VERSIONED, Namespace: "fixture/v1", Digest: strings.Repeat("x", 200*1024)},
 	}}}
 	response, err := client.GetEffectiveInputs(context.Background(), req)
 	require.NoError(t, err)
@@ -267,7 +267,7 @@ func TestEffectiveInputsOversizedResponseKeepsRuntimeServices(t *testing.T) {
 		}
 	}
 	require.NotZero(t, truncated, "an oversized declaration must drop observations")
-	require.Contains(t, inputTask(t, response, agentv0.TaskPhase_TASK_PHASE_TEST, "integration").RuntimeServices, "app/api")
+	require.Contains(t, inputTask(t, response, agentv1.TaskPhase_TASK_PHASE_TEST, "integration").RuntimeServices, "app/api")
 }
 
 // A caller-resolved input whose mode disagrees with the worktree must not make
@@ -278,8 +278,8 @@ func TestEffectiveInputsAdoptsResolvedContextDespiteModeDisagreement(t *testing.
 	require.NoError(t, os.Chmod(filepath.Join(service.Location, "service.codefly.yaml"), 0644))
 	protected, err := ciinputs.Protect([]byte("01234567890123456789012345678901"), "key-v1", []byte("declaration"))
 	require.NoError(t, err)
-	in := &agentv0.EffectiveInput{Kind: agentv0.EffectiveInputKind_EFFECTIVE_INPUT_KIND_CONFIGURATION, Owner: "app/web", Name: "service.codefly.yaml", Path: true, Mode: 0100755, Sensitive: true, Identity: protected}
-	req := &agentv0.GetEffectiveInputsRequest{SchemaVersion: 1, Snapshot: "mode", Context: []*agentv0.EffectiveInput{in}}
+	in := &agentv1.EffectiveInput{Kind: agentv1.EffectiveInputKind_EFFECTIVE_INPUT_KIND_CONFIGURATION, Owner: "app/web", Name: "service.codefly.yaml", Path: true, Mode: 0100755, Sensitive: true, Identity: protected}
+	req := &agentv1.GetEffectiveInputsRequest{SchemaVersion: 1, Snapshot: "mode", Context: []*agentv1.EffectiveInput{in}}
 	response, err := client.GetEffectiveInputs(context.Background(), req)
 	require.NoError(t, err)
 	for _, task := range response.Tasks {
@@ -300,11 +300,11 @@ func TestEffectiveInputsMergesDependenciesResolvingToOneOwner(t *testing.T) {
 	require.NoError(t, err)
 	declaration.ServiceDependencies = []*resources.ServiceDependency{{Name: "api"}, {Name: "api", Module: "app"}}
 	require.NoError(t, declaration.SaveAtDir(context.Background(), service.Location))
-	implementation := &agentv0.EffectiveInput{Kind: agentv0.EffectiveInputKind_EFFECTIVE_INPUT_KIND_SERVICE_IMPLEMENTATION, Owner: "app/api", Name: "implementation", Identity: inputContentIdentity([]byte("api"))}
-	req := &agentv0.GetEffectiveInputsRequest{SchemaVersion: 1, Snapshot: "duplicate-owner", Context: []*agentv0.EffectiveInput{implementation}}
+	implementation := &agentv1.EffectiveInput{Kind: agentv1.EffectiveInputKind_EFFECTIVE_INPUT_KIND_SERVICE_IMPLEMENTATION, Owner: "app/api", Name: "implementation", Identity: inputContentIdentity([]byte("api"))}
+	req := &agentv1.GetEffectiveInputsRequest{SchemaVersion: 1, Snapshot: "duplicate-owner", Context: []*agentv1.EffectiveInput{implementation}}
 	response, err := client.GetEffectiveInputs(context.Background(), req)
 	require.NoError(t, err)
-	task := inputTask(t, response, agentv0.TaskPhase_TASK_PHASE_TEST, "integration")
+	task := inputTask(t, response, agentv1.TaskPhase_TASK_PHASE_TEST, "integration")
 	matches := 0
 	for _, in := range task.Inputs {
 		if proto.Equal(in, implementation) {
@@ -319,12 +319,12 @@ func TestEffectiveInputsMergesDependenciesResolvingToOneOwner(t *testing.T) {
 // the call would fail the caller, because Core degrades only on Unimplemented.
 func TestEffectiveInputsAcceptsRepositorySizedContext(t *testing.T) {
 	_, client := inputsFixture(t)
-	req := &agentv0.GetEffectiveInputsRequest{SchemaVersion: 1, Snapshot: "wide"}
+	req := &agentv1.GetEffectiveInputsRequest{SchemaVersion: 1, Snapshot: "wide"}
 	for i := 0; i < 4000; i++ {
 		identity, err := ciinputs.Protect([]byte("01234567890123456789012345678901"), "fixture/key-v1", []byte(fmt.Sprint(i)))
 		require.NoError(t, err)
-		req.Context = append(req.Context, &agentv0.EffectiveInput{
-			Kind: agentv0.EffectiveInputKind_EFFECTIVE_INPUT_KIND_SOURCE, Owner: "app/web",
+		req.Context = append(req.Context, &agentv1.EffectiveInput{
+			Kind: agentv1.EffectiveInputKind_EFFECTIVE_INPUT_KIND_SOURCE, Owner: "app/web",
 			Name: fmt.Sprintf("modules/app/web/code/src/components/Component%04d.tsx", i),
 			Path: true, Mode: 0100644, Sensitive: true, Identity: identity,
 		})
@@ -339,7 +339,7 @@ func TestEffectiveInputsAcceptsRepositorySizedContext(t *testing.T) {
 // conservative rather than failing the caller's discovery with an error.
 func TestEffectiveInputsOversizedRequestReturnsInventory(t *testing.T) {
 	service, _ := inputsFixture(t)
-	req := &agentv0.GetEffectiveInputsRequest{SchemaVersion: 1, Snapshot: strings.Repeat("s", inputRequestLimit+1)}
+	req := &agentv1.GetEffectiveInputsRequest{SchemaVersion: 1, Snapshot: strings.Repeat("s", inputRequestLimit+1)}
 	response, err := service.GetEffectiveInputs(context.Background(), req)
 	require.NoError(t, err)
 	require.Len(t, response.Tasks, 11)
@@ -360,40 +360,40 @@ func TestEffectiveInputsCompleteSBOMWithConfiguredSourceDir(t *testing.T) {
 	declaration.Spec["source-dir"] = "app"
 	require.NoError(t, declaration.SaveAtDir(context.Background(), service.Location))
 	inputWrite(t, service.Location, "app/package-lock.json", `{"lockfileVersion":3,"packages":{"":{"name":"web","version":"1.0.0"}}}`)
-	req := &agentv0.GetEffectiveInputsRequest{SchemaVersion: 1, Snapshot: "source-dir", Context: []*agentv0.EffectiveInput{{
-		Kind: agentv0.EffectiveInputKind_EFFECTIVE_INPUT_KIND_CONFIGURATION, Owner: "app/web", Name: "sbom/options",
-		Identity: &agentv0.EffectiveIdentity{Kind: agentv0.EffectiveIdentityKind_EFFECTIVE_IDENTITY_KIND_VERSIONED, Namespace: "codefly.nextjs.sbom-options/v1", Digest: "include-dev=false"},
+	req := &agentv1.GetEffectiveInputsRequest{SchemaVersion: 1, Snapshot: "source-dir", Context: []*agentv1.EffectiveInput{{
+		Kind: agentv1.EffectiveInputKind_EFFECTIVE_INPUT_KIND_CONFIGURATION, Owner: "app/web", Name: "sbom/options",
+		Identity: &agentv1.EffectiveIdentity{Kind: agentv1.EffectiveIdentityKind_EFFECTIVE_IDENTITY_KIND_VERSIONED, Namespace: "codefly.nextjs.sbom-options/v1", Digest: "include-dev=false"},
 	}}}
 	for _, file := range []struct {
 		name string
-		kind agentv0.EffectiveInputKind
-	}{{"service.codefly.yaml", agentv0.EffectiveInputKind_EFFECTIVE_INPUT_KIND_CONFIGURATION}, {"app/package-lock.json", agentv0.EffectiveInputKind_EFFECTIVE_INPUT_KIND_LOCKFILE}} {
+		kind agentv1.EffectiveInputKind
+	}{{"service.codefly.yaml", agentv1.EffectiveInputKind_EFFECTIVE_INPUT_KIND_CONFIGURATION}, {"app/package-lock.json", agentv1.EffectiveInputKind_EFFECTIVE_INPUT_KIND_LOCKFILE}} {
 		data, err := os.ReadFile(filepath.Join(service.Location, file.name))
 		require.NoError(t, err)
 		identity, err := ciinputs.Protect([]byte("01234567890123456789012345678901"), "fixture/key-v1", data)
 		require.NoError(t, err)
-		req.Context = append(req.Context, &agentv0.EffectiveInput{Kind: file.kind, Owner: "app/web", Name: file.name, Path: true, Mode: 0100644, Sensitive: true, Identity: identity})
+		req.Context = append(req.Context, &agentv1.EffectiveInput{Kind: file.kind, Owner: "app/web", Name: file.name, Path: true, Mode: 0100644, Sensitive: true, Identity: identity})
 	}
 	response, err := client.GetEffectiveInputs(context.Background(), req)
 	require.NoError(t, err)
-	require.True(t, inputTask(t, response, agentv0.TaskPhase_TASK_PHASE_SBOM, "").Complete)
+	require.True(t, inputTask(t, response, agentv1.TaskPhase_TASK_PHASE_SBOM, "").Complete)
 }
 
 // A stack-starting suite declares a subset of the runtime closure and says so,
 // so the list cannot be mistaken for the whole stack.
 func TestEffectiveInputsSmokeDeclaresUnresolvedRuntimeClosure(t *testing.T) {
 	_, client := inputsFixture(t)
-	response, err := client.GetEffectiveInputs(context.Background(), &agentv0.GetEffectiveInputsRequest{SchemaVersion: 1, Snapshot: "stack"})
+	response, err := client.GetEffectiveInputs(context.Background(), &agentv1.GetEffectiveInputsRequest{SchemaVersion: 1, Snapshot: "stack"})
 	require.NoError(t, err)
-	require.True(t, hasMarker(inputTask(t, response, agentv0.TaskPhase_TASK_PHASE_TEST, "smoke"), markerRuntimeClosureUnresolved))
-	require.False(t, hasMarker(inputTask(t, response, agentv0.TaskPhase_TASK_PHASE_TEST, "integration"), markerRuntimeClosureUnresolved))
+	require.True(t, hasMarker(inputTask(t, response, agentv1.TaskPhase_TASK_PHASE_TEST, "smoke"), markerRuntimeClosureUnresolved))
+	require.False(t, hasMarker(inputTask(t, response, agentv1.TaskPhase_TASK_PHASE_TEST, "integration"), markerRuntimeClosureUnresolved))
 }
 
 // An inspected phase reports that isolated inspection could not run, so a task
 // that observed nothing is distinguishable from one that inspected cleanly.
 func TestEffectiveInputsDeclaresUnavailableInspection(t *testing.T) {
 	_, client := inputsFixture(t)
-	response, err := client.GetEffectiveInputs(context.Background(), &agentv0.GetEffectiveInputsRequest{SchemaVersion: 1, Snapshot: "no-inspection"})
+	response, err := client.GetEffectiveInputs(context.Background(), &agentv1.GetEffectiveInputsRequest{SchemaVersion: 1, Snapshot: "no-inspection"})
 	require.NoError(t, err)
 	inspected := 0
 	for _, task := range response.Tasks {
@@ -416,7 +416,7 @@ func TestNativeImageReferenceRejectsNonReferences(t *testing.T) {
 	require.False(t, usableImageReference("node:22\nalpine"))
 }
 
-func hasMarker(task *agentv0.TaskInputs, name string) bool {
+func hasMarker(task *agentv1.TaskInputs, name string) bool {
 	for _, in := range task.Inputs {
 		if in.Name == name {
 			return true
@@ -430,18 +430,18 @@ func TestEffectiveInputsCompleteSBOMThroughCore(t *testing.T) {
 	t.Setenv("CODEFLY_PROVIDER_ARTIFACT_DIGEST", "sha256:"+strings.Repeat("a", 64))
 	lock := `{"name":"web","version":"1.0.0","lockfileVersion":3,"packages":{"":{"name":"web","version":"1.0.0"}}}`
 	inputWrite(t, service.Location, "code/package-lock.json", lock)
-	req := &agentv0.GetEffectiveInputsRequest{SchemaVersion: 1, Snapshot: "before", Context: []*agentv0.EffectiveInput{{Kind: agentv0.EffectiveInputKind_EFFECTIVE_INPUT_KIND_CONFIGURATION, Owner: "app/web", Name: "sbom/options", Identity: &agentv0.EffectiveIdentity{Kind: agentv0.EffectiveIdentityKind_EFFECTIVE_IDENTITY_KIND_VERSIONED, Namespace: "codefly.nextjs.sbom-options/v1", Digest: "include-dev=false"}}}}
+	req := &agentv1.GetEffectiveInputsRequest{SchemaVersion: 1, Snapshot: "before", Context: []*agentv1.EffectiveInput{{Kind: agentv1.EffectiveInputKind_EFFECTIVE_INPUT_KIND_CONFIGURATION, Owner: "app/web", Name: "sbom/options", Identity: &agentv1.EffectiveIdentity{Kind: agentv1.EffectiveIdentityKind_EFFECTIVE_IDENTITY_KIND_VERSIONED, Namespace: "codefly.nextjs.sbom-options/v1", Digest: "include-dev=false"}}}}
 	for _, file := range []struct {
 		name string
-		kind agentv0.EffectiveInputKind
-	}{{"service.codefly.yaml", agentv0.EffectiveInputKind_EFFECTIVE_INPUT_KIND_CONFIGURATION}, {"code/package-lock.json", agentv0.EffectiveInputKind_EFFECTIVE_INPUT_KIND_LOCKFILE}} {
+		kind agentv1.EffectiveInputKind
+	}{{"service.codefly.yaml", agentv1.EffectiveInputKind_EFFECTIVE_INPUT_KIND_CONFIGURATION}, {"code/package-lock.json", agentv1.EffectiveInputKind_EFFECTIVE_INPUT_KIND_LOCKFILE}} {
 		data, err := os.ReadFile(filepath.Join(service.Location, file.name))
 		require.NoError(t, err)
 		identity, err := ciinputs.Protect([]byte("01234567890123456789012345678901"), "fixture/key-v1", data)
 		require.NoError(t, err)
-		req.Context = append(req.Context, &agentv0.EffectiveInput{Kind: file.kind, Owner: "app/web", Name: file.name, Path: true, Mode: 0100644, Sensitive: true, Identity: identity})
+		req.Context = append(req.Context, &agentv1.EffectiveInput{Kind: file.kind, Owner: "app/web", Name: file.name, Path: true, Mode: 0100644, Sensitive: true, Identity: identity})
 	}
-	info, err := client.GetAgentInformation(context.Background(), &agentv0.AgentInformationRequest{})
+	info, err := client.GetAgentInformation(context.Background(), &agentv1.AgentInformationRequest{})
 	require.NoError(t, err)
 	required, err := ciinputs.Required(info.Validation)
 	require.NoError(t, err)
@@ -449,7 +449,7 @@ func TestEffectiveInputsCompleteSBOMThroughCore(t *testing.T) {
 		tasks, err := ciinputs.Discover(context.Background(), client, info, req, required)
 		require.NoError(t, err)
 		for _, task := range tasks {
-			if task.Key.Phase == agentv0.TaskPhase_TASK_PHASE_SBOM {
+			if task.Key.Phase == agentv1.TaskPhase_TASK_PHASE_SBOM {
 				require.True(t, task.CacheEligible)
 				return task
 			}
@@ -462,18 +462,18 @@ func TestEffectiveInputsCompleteSBOMThroughCore(t *testing.T) {
 	unrelated, err := ciinputs.Discover(context.Background(), client, info, req, required)
 	require.NoError(t, err)
 	for _, task := range unrelated {
-		if task.Key.Phase == agentv0.TaskPhase_TASK_PHASE_SBOM {
+		if task.Key.Phase == agentv1.TaskPhase_TASK_PHASE_SBOM {
 			require.False(t, task.CacheEligible)
 		}
 	}
 	req.Context[2].Owner = "app/web"
 	builder := NewBuilder(service)
-	bomBefore, err := builder.SBOM(context.Background(), &builderv0.SBOMRequest{})
+	bomBefore, err := builder.SBOM(context.Background(), &builderv1.SBOMRequest{})
 	require.NoError(t, err)
 	inputWrite(t, service.Location, "code/unit.test.ts", "test-only edit")
 	req.Snapshot = "test-only"
 	require.Equal(t, before.Identity, discover().Identity)
-	bomAfter, err := builder.SBOM(context.Background(), &builderv0.SBOMRequest{})
+	bomAfter, err := builder.SBOM(context.Background(), &builderv1.SBOMRequest{})
 	require.NoError(t, err)
 	require.True(t, proto.Equal(bomBefore, bomAfter))
 	inputWrite(t, service.Location, "code/package-lock.json", strings.ReplaceAll(lock, "1.0.0", "2.0.0"))
@@ -484,7 +484,7 @@ func TestEffectiveInputsCompleteSBOMThroughCore(t *testing.T) {
 	req.Snapshot = "lock-change"
 	lockChanged := discover()
 	require.NotEqual(t, before.Identity, lockChanged.Identity)
-	bomAfter, err = builder.SBOM(context.Background(), &builderv0.SBOMRequest{})
+	bomAfter, err = builder.SBOM(context.Background(), &builderv1.SBOMRequest{})
 	require.NoError(t, err)
 	require.False(t, proto.Equal(bomBefore, bomAfter))
 	t.Setenv("CODEFLY_PROVIDER_ARTIFACT_DIGEST", "sha256:"+strings.Repeat("b", 64))
@@ -496,7 +496,7 @@ func TestEffectiveInputsCompleteSBOMThroughCore(t *testing.T) {
 	require.NoError(t, os.Symlink("real-code", filepath.Join(service.Location, "code")))
 	response, err := client.GetEffectiveInputs(context.Background(), req)
 	require.NoError(t, err)
-	sbom := inputTask(t, response, agentv0.TaskPhase_TASK_PHASE_SBOM, "")
+	sbom := inputTask(t, response, agentv1.TaskPhase_TASK_PHASE_SBOM, "")
 	require.False(t, sbom.Complete)
 	require.EqualValues(t, 0120000, pathInput(t, sbom, "code").Mode)
 }

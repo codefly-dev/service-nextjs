@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	codev0 "github.com/codefly-dev/core/generated/go/codefly/services/code/v0"
+	codev1 "github.com/codefly-dev/core/generated/go/codefly/services/code/v1"
 )
 
 func TestParseESLintFixUsesFixedOutputAndDiagnostics(t *testing.T) {
@@ -43,7 +43,7 @@ func TestNextFixerUsesProjectLocalESLintWithoutWritingOnDryRun(t *testing.T) {
 	svc := NewService()
 	svc.sourceLocation = dir
 	server := NewCode(svc)
-	response, err := server.Execute(context.Background(), &codev0.CodeRequest{Operation: &codev0.CodeRequest_Fix{Fix: &codev0.FixRequest{
+	response, err := server.Execute(context.Background(), &codev1.CodeRequest{Operation: &codev1.CodeRequest_Fix{Fix: &codev1.FixRequest{
 		File: "sample.ts", DryRun: true,
 	}}})
 	if err != nil {
@@ -82,7 +82,7 @@ func TestNextFixerRejectsSuccessfulEmptyBiomeOutput(t *testing.T) {
 	svc := NewService()
 	svc.sourceLocation = dir
 	server := NewCode(svc)
-	response, err := server.Execute(context.Background(), &codev0.CodeRequest{Operation: &codev0.CodeRequest_Fix{Fix: &codev0.FixRequest{
+	response, err := server.Execute(context.Background(), &codev1.CodeRequest{Operation: &codev1.CodeRequest_Fix{Fix: &codev1.FixRequest{
 		File: "sample.ts", DryRun: true,
 	}}})
 	if err != nil {

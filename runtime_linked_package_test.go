@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	basev0 "github.com/codefly-dev/core/generated/go/codefly/base/v0"
-	runtimev0 "github.com/codefly-dev/core/generated/go/codefly/services/runtime/v0"
+	basev1 "github.com/codefly-dev/core/generated/go/codefly/base/v1"
+	runtimev1 "github.com/codefly-dev/core/generated/go/codefly/services/runtime/v1"
 	"github.com/codefly-dev/core/resources"
 	"github.com/stretchr/testify/require"
 )
@@ -253,20 +253,20 @@ func TestExternalLinksNameOnlyPackagesOutsideTheSource(t *testing.T) {
 
 // initializedNativeRuntime loads and initializes the runtime against the
 // fixture workspace, the state ensureNodeDependencies is reached from.
-func initializedNativeRuntime(t *testing.T, ctx context.Context, identity *basev0.ServiceIdentity, environment *resources.Environment) *Runtime {
+func initializedNativeRuntime(t *testing.T, ctx context.Context, identity *basev1.ServiceIdentity, environment *resources.Environment) *Runtime {
 	t.Helper()
 	runtime := NewRuntime(NewService())
 	env, err := environment.Proto()
 	require.NoError(t, err)
-	_, err = runtime.Load(ctx, &runtimev0.LoadRequest{Identity: identity, Environment: env, DisableCatch: true})
+	_, err = runtime.Load(ctx, &runtimev1.LoadRequest{Identity: identity, Environment: env, DisableCatch: true})
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		_, err := runtime.Destroy(ctx, &runtimev0.DestroyRequest{})
+		_, err := runtime.Destroy(ctx, &runtimev1.DestroyRequest{})
 		require.NoError(t, err)
 	})
-	ready, err := runtime.Init(ctx, &runtimev0.InitRequest{RuntimeContext: resources.NewRuntimeContextNative()})
+	ready, err := runtime.Init(ctx, &runtimev1.InitRequest{RuntimeContext: resources.NewRuntimeContextNative()})
 	require.NoError(t, err)
-	require.Equal(t, runtimev0.InitStatus_READY, ready.GetStatus().GetState(), ready.GetStatus().GetMessage())
+	require.Equal(t, runtimev1.InitStatus_READY, ready.GetStatus().GetState(), ready.GetStatus().GetMessage())
 	return runtime
 }
 

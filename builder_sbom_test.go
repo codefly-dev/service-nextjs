@@ -8,8 +8,8 @@ import (
 	"testing"
 
 	"github.com/codefly-dev/core/agents/services/sbom"
-	basev0 "github.com/codefly-dev/core/generated/go/codefly/base/v0"
-	builderv0 "github.com/codefly-dev/core/generated/go/codefly/services/builder/v0"
+	basev1 "github.com/codefly-dev/core/generated/go/codefly/base/v1"
+	builderv1 "github.com/codefly-dev/core/generated/go/codefly/services/builder/v1"
 	"github.com/stretchr/testify/require"
 )
 
@@ -17,9 +17,9 @@ func loadedBuilder(t *testing.T) *Builder {
 	t.Helper()
 	identity, _ := testIdentity(t, t.TempDir())
 	builder := NewBuilder(NewService())
-	_, err := builder.Load(context.Background(), &builderv0.LoadRequest{
+	_, err := builder.Load(context.Background(), &builderv1.LoadRequest{
 		Identity:     identity,
-		CreationMode: &builderv0.CreationMode{Communicate: false},
+		CreationMode: &builderv1.CreationMode{Communicate: false},
 	})
 	require.NoError(t, err)
 	writeRecipePackage(t, builder.Local("%s", builder.Settings.NodeSourceDir()))
@@ -30,13 +30,13 @@ func loadedBuilder(t *testing.T) *Builder {
 // can serve, so resolution fails before any scanner is invoked.
 const unresolvableDigest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
-func buildPlan(t *testing.T, builder *Builder) *builderv0.DockerBuildPlan {
+func buildPlan(t *testing.T, builder *Builder) *builderv1.DockerBuildPlan {
 	t.Helper()
-	response, err := builder.Build(context.Background(), &builderv0.BuildRequest{
+	response, err := builder.Build(context.Background(), &builderv1.BuildRequest{
 		OutputDirectory: t.TempDir(),
-		BuildContext: &builderv0.BuildContext{
-			Kind: &builderv0.BuildContext_DockerBuildContext{
-				DockerBuildContext: &builderv0.DockerBuildContext{
+		BuildContext: &builderv1.BuildContext{
+			Kind: &builderv1.BuildContext_DockerBuildContext{
+				DockerBuildContext: &builderv1.DockerBuildContext{
 					DockerRepository: "registry.example.com",
 				},
 			},
@@ -51,7 +51,7 @@ func buildPlan(t *testing.T, builder *Builder) *builderv0.DockerBuildPlan {
 // resolvedFrom stands in for the build the caller ran: one resolved image per
 // recipe and platform, each with its own digest so coverage is matched per
 // platform rather than satisfied by any one of them.
-func resolvedFrom(plan *builderv0.DockerBuildPlan) []sbom.ResolvedImage {
+func resolvedFrom(plan *builderv1.DockerBuildPlan) []sbom.ResolvedImage {
 	var resolved []sbom.ResolvedImage
 	for _, recipe := range plan.GetRecipes() {
 		for i, platform := range recipe.GetPlatforms() {
@@ -67,7 +67,7 @@ func resolvedFrom(plan *builderv0.DockerBuildPlan) []sbom.ResolvedImage {
 
 // buildPlanSubjects is what the recipe declares once the caller's build has
 // pinned each shipped platform to the digest it produced.
-func buildPlanSubjects(t *testing.T, builder *Builder) []*builderv0.ImageSubject {
+func buildPlanSubjects(t *testing.T, builder *Builder) []*builderv1.ImageSubject {
 	t.Helper()
 	plan := buildPlan(t, builder)
 	subjects, err := sbom.ExpectedFromBuildPlan("frontend", plan, resolvedFrom(plan))
@@ -79,12 +79,12 @@ func buildPlanSubjects(t *testing.T, builder *Builder) []*builderv0.ImageSubject
 // no digest. Deriving subjects this way is the mistake the agent has to refuse,
 // so they are built here rather than obtained from a helper that now refuses to
 // produce them.
-func unpinnedPlanSubjects(t *testing.T, builder *Builder) []*builderv0.ImageSubject {
+func unpinnedPlanSubjects(t *testing.T, builder *Builder) []*builderv1.ImageSubject {
 	t.Helper()
-	var subjects []*builderv0.ImageSubject
+	var subjects []*builderv1.ImageSubject
 	for _, recipe := range buildPlan(t, builder).GetRecipes() {
 		for _, platform := range recipe.GetPlatforms() {
-			subjects = append(subjects, &builderv0.ImageSubject{
+			subjects = append(subjects, &builderv1.ImageSubject{
 				Reference: recipe.GetImage(),
 				Platform:  platform,
 				Role:      recipe.GetName(),
@@ -159,15 +159,15 @@ func TestSourceSBOMIsScopedToSourceAndFailsImageCoverage(t *testing.T) {
 
 	// An unset scope means source, and an explicit source request is the same
 	// answer: both must reach the inventory rather than an unsupported scope.
-	for _, scope := range []builderv0.SBOMScope{
-		builderv0.SBOMScope_SBOM_SCOPE_UNSPECIFIED,
-		builderv0.SBOMScope_SBOM_SCOPE_SOURCE,
+	for _, scope := range []builderv1.SBOMScope{
+		builderv1.SBOMScope_SBOM_SCOPE_UNSPECIFIED,
+		builderv1.SBOMScope_SBOM_SCOPE_SOURCE,
 	} {
-		response, err := builder.SBOM(context.Background(), &builderv0.SBOMRequest{Scope: scope})
+		response, err := builder.SBOM(context.Background(), &builderv1.SBOMRequest{Scope: scope})
 		require.NoError(t, err)
 
-		require.Equal(t, builderv0.SBOMStatus_COMPLETE, response.GetState().GetState())
-		require.Equal(t, builderv0.SBOMScope_SBOM_SCOPE_SOURCE, response.GetScope())
+		require.Equal(t, builderv1.SBOMStatus_COMPLETE, response.GetState().GetState())
+		require.Equal(t, builderv1.SBOMScope_SBOM_SCOPE_SOURCE, response.GetScope())
 		require.NotEmpty(t, response.GetBom().GetComponents())
 		require.Empty(t, response.GetImages())
 
@@ -181,19 +181,19 @@ func TestSourceSBOMIsScopedToSourceAndFailsImageCoverage(t *testing.T) {
 func TestImageSBOMWithoutSubjectsIsAPreconditionFailure(t *testing.T) {
 	builder := loadedBuilder(t)
 
-	response, err := builder.SBOM(context.Background(), &builderv0.SBOMRequest{
-		Scope: builderv0.SBOMScope_SBOM_SCOPE_IMAGE,
+	response, err := builder.SBOM(context.Background(), &builderv1.SBOMRequest{
+		Scope: builderv1.SBOMScope_SBOM_SCOPE_IMAGE,
 	})
 	require.NoError(t, err)
 
-	require.Equal(t, builderv0.SBOMStatus_ERROR, response.GetState().GetState())
-	require.Equal(t, builderv0.SBOMScope_SBOM_SCOPE_IMAGE, response.GetScope())
+	require.Equal(t, builderv1.SBOMStatus_ERROR, response.GetState().GetState())
+	require.Equal(t, builderv1.SBOMScope_SBOM_SCOPE_IMAGE, response.GetScope())
 	require.Equal(t,
-		basev0.FailureCode_FAILURE_CODE_PRECONDITION_FAILED,
+		basev1.FailureCode_FAILURE_CODE_PRECONDITION_FAILED,
 		response.GetState().GetFailure().GetCode(),
 	)
 	require.Empty(t, response.GetImages())
-	require.Equal(t, builderv0.NoImageReason_NO_IMAGE_REASON_UNSPECIFIED, response.GetNoImageReason())
+	require.Equal(t, builderv1.NoImageReason_NO_IMAGE_REASON_UNSPECIFIED, response.GetNoImageReason())
 
 	require.Error(t, sbom.ValidateCoverage("frontend", buildPlanSubjects(t, builder), response))
 }
@@ -211,16 +211,16 @@ func TestImageSBOMRejectsSubjectsWithoutAnImmutableDigest(t *testing.T) {
 		require.NotContains(t, subject.GetReference(), "@")
 	}
 
-	response, err := builder.SBOM(context.Background(), &builderv0.SBOMRequest{
-		Scope:    builderv0.SBOMScope_SBOM_SCOPE_IMAGE,
+	response, err := builder.SBOM(context.Background(), &builderv1.SBOMRequest{
+		Scope:    builderv1.SBOMScope_SBOM_SCOPE_IMAGE,
 		Subjects: subjects,
 	})
 	require.NoError(t, err)
 
-	require.Equal(t, builderv0.SBOMStatus_ERROR, response.GetState().GetState())
-	require.Equal(t, builderv0.SBOMScope_SBOM_SCOPE_IMAGE, response.GetScope())
+	require.Equal(t, builderv1.SBOMStatus_ERROR, response.GetState().GetState())
+	require.Equal(t, builderv1.SBOMScope_SBOM_SCOPE_IMAGE, response.GetScope())
 	require.Equal(t,
-		basev0.FailureCode_FAILURE_CODE_PRECONDITION_FAILED,
+		basev1.FailureCode_FAILURE_CODE_PRECONDITION_FAILED,
 		response.GetState().GetFailure().GetCode(),
 	)
 	require.Empty(t, response.GetImages())
@@ -233,9 +233,9 @@ func TestImageSBOMRejectsSubjectsWithoutAnImmutableDigest(t *testing.T) {
 func TestImageSBOMPropagatesScanFailureAndResolvesThroughTheRegistry(t *testing.T) {
 	builder := loadedBuilder(t)
 
-	response, err := builder.SBOM(context.Background(), &builderv0.SBOMRequest{
-		Scope: builderv0.SBOMScope_SBOM_SCOPE_IMAGE,
-		Subjects: []*builderv0.ImageSubject{{
+	response, err := builder.SBOM(context.Background(), &builderv1.SBOMRequest{
+		Scope: builderv1.SBOMScope_SBOM_SCOPE_IMAGE,
+		Subjects: []*builderv1.ImageSubject{{
 			Reference: "codefly.invalid/frontend@" + unresolvableDigest,
 			Digest:    unresolvableDigest,
 			Platform:  "linux/amd64",
@@ -245,8 +245,8 @@ func TestImageSBOMPropagatesScanFailureAndResolvesThroughTheRegistry(t *testing.
 	})
 	require.NoError(t, err)
 
-	require.Equal(t, builderv0.SBOMStatus_ERROR, response.GetState().GetState())
-	require.Equal(t, builderv0.SBOMScope_SBOM_SCOPE_IMAGE, response.GetScope())
+	require.Equal(t, builderv1.SBOMStatus_ERROR, response.GetState().GetState())
+	require.Equal(t, builderv1.SBOMScope_SBOM_SCOPE_IMAGE, response.GetScope())
 	require.NotEmpty(t, response.GetState().GetMessage())
 	require.Empty(t, response.GetImages())
 	// Only the local-daemon path reports this, so without the assertion no test
@@ -260,12 +260,12 @@ func TestUnknownSBOMScopeIsUnsupported(t *testing.T) {
 	builder := loadedBuilder(t)
 	seedLockfile(t, builder)
 
-	response, err := builder.SBOM(context.Background(), &builderv0.SBOMRequest{
-		Scope: builderv0.SBOMScope(99),
+	response, err := builder.SBOM(context.Background(), &builderv1.SBOMRequest{
+		Scope: builderv1.SBOMScope(99),
 	})
 	require.NoError(t, err)
 
-	require.Equal(t, builderv0.SBOMStatus_UNSUPPORTED, response.GetState().GetState())
+	require.Equal(t, builderv1.SBOMStatus_UNSUPPORTED, response.GetState().GetState())
 	require.Empty(t, response.GetBom().GetComponents())
 	require.Empty(t, response.GetImages())
 }
