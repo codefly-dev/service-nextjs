@@ -135,7 +135,7 @@ func TestBuildEmitsRecipeWhenOutputDirectorySet(t *testing.T) {
 
 	plan := response.GetResult().GetDockerBuildPlan()
 	require.NotNil(t, plan)
-	require.Equal(t, services.DockerBuildRecipeContextContractVersion, plan.GetContractVersion())
+	require.Equal(t, services.DockerBuildRecipeContractVersion, plan.GetContractVersion())
 	require.Contains(t, plan.GetDigest(), "sha256:")
 
 	require.Len(t, plan.GetRecipes(), 1)
