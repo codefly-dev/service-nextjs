@@ -105,8 +105,8 @@ func TestNativeAgentOwnershipLifecycle(t *testing.T) {
 		t.Fatalf("preview: %v", err)
 	}
 	expected, err := runners.ParseProcessGroupRecoveryExpectation(preview)
-	if err != nil || expected.Namespace != "authenticated-v2" || expected.PGID != a.group.PGID() || expected.Owner.PID != a.owner.PID {
-		t.Fatalf("actual agent did not write the expected v2 registration: %+v, %v", expected, err)
+	if err != nil || expected.Namespace != "workspace-authenticated-v1" || expected.PGID != a.group.PGID() || expected.Owner.PID != a.owner.PID {
+		t.Fatalf("actual agent did not write the current workspace-authenticated-v1 registration: %+v, %v", expected, err)
 	}
 	// Recovery represents the recorded owner with PGID=0; compare its birth,
 	// not the full struct, to the launch identity retained before any workload.

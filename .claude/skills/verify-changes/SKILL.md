@@ -108,7 +108,7 @@ source is the hack this repo's rules forbid.
 
 ### Actual native agent ownership
 
-Core v0.19.10 supplies the authenticated-v2 native writer and identity-bound
+The pinned Core supplies the workspace-authenticated-v1 native writer and identity-bound
 stop/recovery APIs. This agent consumes them through its existing native runner;
 already-installed binaries retain the Core they were built with.
 
@@ -129,7 +129,7 @@ SERVICE_NEXTJS_QUALIFICATION_CLI=/absolute/reviewed/codefly \
 This opt-in gate loads the installed agent through Core's authenticated manager
 and drives real Next.js applications through gRPC Load/Init/Start/Stop/restart.
 It checks that Start's RPC lifetime does not own the workload, ordinary Stop
-removes the registered group, and the actual writer records authenticated-v2
+removes the registered group, and the actual writer records workspace-authenticated-v1
 ownership. It kills only the exact disposable agent owner, recovers its orphan
 through CLI preview/expect, and verifies an independently launched sibling's
 process births remain unchanged. Core owns authentication, process inspection,
