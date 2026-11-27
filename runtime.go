@@ -481,6 +481,11 @@ func (s *Runtime) Start(ctx context.Context, req *runtimev1.StartRequest) (*runt
 		resources.Env("NODE_OPTIONS", "--max-old-space-size=2048"),
 		resources.Env("NEXT_TELEMETRY_DISABLED", "1"),
 	}
+	scopedOutput, err := s.developmentOutputEnvironment(allEnvs)
+	if err != nil {
+		return s.Runtime.StartErrorf(err, "preparing Next.js development output")
+	}
+	commonRuntimeEnvs = append(commonRuntimeEnvs, scopedOutput...)
 	if s.executionProfile == NextExecutionProduction {
 		commonRuntimeEnvs = append(commonRuntimeEnvs, resources.Env("NODE_ENV", "production"))
 		build, buildErr := s.runnerEnvironment.NewProcess("npm", "run", "build")

@@ -47,6 +47,8 @@ func TestNativeAgentOwnershipLifecycle(t *testing.T) {
 	})
 	t.Setenv("HOME", home) // Core's process registry is OS-home scoped.
 	t.Setenv(resources.CodeflyHomeEnv, agentHome)
+	// Qualify these exact installed bytes even when their version also has a release.
+	t.Setenv(manager.AgentSourceEnv, "local")
 	t.Setenv("GOWORK", "off")
 	installed, err := agent.Path(t.Context())
 	if err != nil {

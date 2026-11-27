@@ -66,6 +66,31 @@ spec:
 
 The value must be a positive duration no greater than ten minutes.
 
+## Development output by scope
+
+Native and Nix runs of the supplied Next.js 16.4 application keep each
+workspace and naming scope's dev server lock, manifests and caches beneath
+the application's configured output directory. The npm dev command runs from
+the real application, so local package references, project root selection and
+hot reload use the same files as an ordinary development run.
+
+Codefly uses Next's deployment adapter hook for development. A deployment
+adapter supplied by `NEXT_ADAPTER_PATH` still receives the resolved config.
+Next gives an explicit `adapterPath` in the application's config precedence
+over the environment. Such an adapter can opt into the scoped output as its
+last development step:
+
+```js
+if (context.phase === 'phase-development-server' && process.env.CODEFLY_NEXT_ADAPTER_PATH) {
+  return require(process.env.CODEFLY_NEXT_ADAPTER_PATH).modifyConfig(config, context);
+}
+return config;
+```
+
+The scope applies to the Next output tree. In TypeScript applications Next
+also maintains `next-env.d.ts` and its TypeScript configuration at the project
+root. Those files are shared by development runs of the same checkout.
+
 ## Build
 
 The service builds a standalone Docker image for production deployment.
